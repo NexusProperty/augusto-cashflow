@@ -4,14 +4,44 @@ import { requireAuth } from '@/lib/auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { revalidatePath } from 'next/cache'
 
+const ALLOWED_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  'text/csv',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/msword',
+  'message/rfc822',
+])
+
+const MIME_TO_EXT: Record<string, string> = {
+  'application/pdf': 'pdf',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-excel': 'xls',
+  'text/csv': 'csv',
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/msword': 'doc',
+  'message/rfc822': 'eml',
+}
+
 export async function uploadDocument(formData: FormData) {
   const user = await requireAuth()
   const file = formData.get('file') as File
   if (!file || file.size === 0) return { error: 'No file provided' }
 
+  if (!ALLOWED_MIME_TYPES.has(file.type)) {
+    return { error: `Unsupported file type: ${file.type}` }
+  }
+
   const admin = createAdminClient()
 
-  const ext = file.name.split('.').pop() ?? 'bin'
+  const ext = MIME_TO_EXT[file.type] ?? 'bin'
   const storagePath = `uploads/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
 
   const { error: uploadError } = await admin.storage
@@ -38,8 +68,8 @@ export async function uploadDocument(formData: FormData) {
   // Trigger edge function processing (fire-and-forget)
   admin.functions.invoke('process-document', {
     body: { documentId: data.id },
-  }).catch((err) => {
-    console.error('Failed to invoke process-document:', err)
+  }).catch(() => {
+    // Processing can be retried — don't fail the upload
   })
 
   revalidatePath('/documents')
@@ -63,9 +93,34 @@ export async function confirmExtraction(extractionId: string, overrides?: {
 
   if (fetchErr || !extraction) return { error: 'Extraction not found' }
 
-  const entityId = overrides?.entityId ?? extraction.entity_name ?? ''
-  const categoryId = overrides?.categoryId ?? extraction.category_name ?? ''
-  const periodId = overrides?.periodId ?? ''
+  // Resolve entity by override UUID or by name lookup
+  let entityId = overrides?.entityId
+  if (!entityId && extraction.entity_name) {
+    const { data: entity } = await admin
+      .from('entities')
+      .select('id')
+      .ilike('name', extraction.entity_name)
+      .limit(1)
+      .single()
+    entityId = entity?.id
+  }
+  if (!entityId) return { error: 'Entity not resolved — please select an entity' }
+
+  // Resolve category by override UUID or by code/name lookup
+  let categoryId = overrides?.categoryId
+  if (!categoryId && extraction.category_name) {
+    const { data: category } = await admin
+      .from('categories')
+      .select('id')
+      .or(`code.ilike.%${extraction.category_name}%,name.ilike.%${extraction.category_name}%`)
+      .limit(1)
+      .single()
+    categoryId = category?.id
+  }
+  if (!categoryId) return { error: 'Category not resolved — please select a category' }
+
+  const periodId = overrides?.periodId
+  if (!periodId) return { error: 'Period not specified — please select a forecast week' }
 
   const { data: line, error: lineErr } = await admin
     .from('forecast_lines')

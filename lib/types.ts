@@ -1,3 +1,7 @@
+// Seed data UUIDs — single source of truth
+export const AUGUSTO_GROUP_ID = 'a0000000-0000-0000-0000-000000000001'
+export const COACHMATE_GROUP_ID = 'a0000000-0000-0000-0000-000000000002'
+
 export type SourceType = 'manual' | 'document' | 'recurring' | 'pipeline'
 export type FlowDirection = 'inflow' | 'outflow' | 'balance' | 'computed'
 

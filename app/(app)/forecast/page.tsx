@@ -6,8 +6,7 @@ import { ForecastGrid } from '@/components/forecast/forecast-grid'
 import { loadForecastData } from '@/lib/forecast/queries'
 import { computeWeekSummaries } from '@/lib/forecast/engine'
 import { generateRecurringLines } from '@/lib/forecast/recurring'
-
-const AUGUSTO_GROUP_ID = 'a0000000-0000-0000-0000-000000000001'
+import { AUGUSTO_GROUP_ID } from '@/lib/types'
 
 const forecastTabs = [
   { label: 'Augusto Group', href: '/forecast' },
@@ -74,6 +73,7 @@ export default async function ForecastPage({
         weeksUntilBreach={weeksUntilBreach}
         pipelineTotal={pipelineTotal}
         pipelineWeighted={Math.round(pipelineWeighted)}
+        odFacilityLimit={data.entityGroup?.odFacilityLimit ?? 0}
       />
 
       <Tabs tabs={forecastTabs} />

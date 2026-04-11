@@ -3,8 +3,7 @@ import { loadForecastData } from '@/lib/forecast/queries'
 import { computeWeekSummaries } from '@/lib/forecast/engine'
 import { generateRecurringLines } from '@/lib/forecast/recurring'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
-
-const AUGUSTO_GROUP_ID = 'a0000000-0000-0000-0000-000000000001'
+import { AUGUSTO_GROUP_ID } from '@/lib/types'
 
 export default async function CompareScenarios() {
   const supabase = await createClient()

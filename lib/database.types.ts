@@ -1,99 +1,148 @@
-// Minimal hand-written DB types. Run `npm run gen:types` once connected to Supabase to regenerate.
+// Minimal hand-written DB types matching migrations 001-010.
+// Run `npm run gen:types` once connected to Supabase to regenerate.
 
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]
 
 export type Database = {
   public: {
     Tables: {
-      documents: {
+      entity_groups: {
         Row: {
           id: string
-          filename: string
-          mime_type: string
-          file_size: number
-          storage_path: string
-          status: string
-          doc_type: string | null
-          error_message: string | null
-          uploaded_by: string | null
+          name: string
+          od_facility_limit: number
+          notes: string | null
           created_at: string
           updated_at: string
         }
         Insert: {
           id?: string
-          filename: string
-          mime_type: string
-          file_size: number
-          storage_path: string
-          status?: string
-          doc_type?: string | null
-          error_message?: string | null
-          uploaded_by?: string | null
+          name: string
+          od_facility_limit?: number
+          notes?: string | null
           created_at?: string
           updated_at?: string
         }
         Update: {
-          id?: string
-          filename?: string
-          mime_type?: string
-          file_size?: number
-          storage_path?: string
-          status?: string
-          doc_type?: string | null
-          error_message?: string | null
-          uploaded_by?: string | null
+          name?: string
+          od_facility_limit?: number
+          notes?: string | null
           updated_at?: string
         }
         Relationships: []
       }
-      document_extractions: {
+      entities: {
         Row: {
           id: string
-          document_id: string
-          entity_name: string | null
-          category_name: string | null
-          counterparty: string | null
-          amount: number | null
-          expected_date: string | null
-          payment_terms: string | null
-          invoice_number: string | null
-          confidence: number
-          raw_text: string | null
-          is_confirmed: boolean
-          is_dismissed: boolean
-          forecast_line_id: string | null
+          group_id: string
+          name: string
+          code: string
+          is_active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          group_id: string
+          name: string
+          code: string
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          group_id?: string
+          name?: string
+          code?: string
+          is_active?: boolean
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      bank_accounts: {
+        Row: {
+          id: string
+          entity_id: string
+          name: string
+          account_type: string
+          od_limit: number
+          notes: string | null
+          is_active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          name: string
+          account_type?: string
+          od_limit?: number
+          notes?: string | null
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          entity_id?: string
+          name?: string
+          account_type?: string
+          od_limit?: number
+          notes?: string | null
+          is_active?: boolean
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      categories: {
+        Row: {
+          id: string
+          parent_id: string | null
+          name: string
+          code: string
+          section_number: string | null
+          sort_order: number
+          is_system: boolean
+          flow_direction: string | null
           created_at: string
         }
         Insert: {
           id?: string
-          document_id: string
-          entity_name?: string | null
-          category_name?: string | null
-          counterparty?: string | null
-          amount?: number | null
-          expected_date?: string | null
-          payment_terms?: string | null
-          invoice_number?: string | null
-          confidence?: number
-          raw_text?: string | null
-          is_confirmed?: boolean
-          is_dismissed?: boolean
-          forecast_line_id?: string | null
+          parent_id?: string | null
+          name: string
+          code: string
+          section_number?: string | null
+          sort_order?: number
+          is_system?: boolean
+          flow_direction?: string | null
           created_at?: string
         }
         Update: {
-          entity_name?: string | null
-          category_name?: string | null
-          counterparty?: string | null
-          amount?: number | null
-          expected_date?: string | null
-          payment_terms?: string | null
-          invoice_number?: string | null
-          confidence?: number
-          raw_text?: string | null
-          is_confirmed?: boolean
-          is_dismissed?: boolean
-          forecast_line_id?: string | null
+          parent_id?: string | null
+          name?: string
+          code?: string
+          section_number?: string | null
+          sort_order?: number
+          is_system?: boolean
+          flow_direction?: string | null
+        }
+        Relationships: []
+      }
+      forecast_periods: {
+        Row: {
+          id: string
+          week_ending: string
+          is_actual: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          week_ending: string
+          is_actual?: boolean
+          created_at?: string
+        }
+        Update: {
+          week_ending?: string
+          is_actual?: boolean
         }
         Relationships: []
       }
@@ -119,7 +168,7 @@ export type Database = {
           entity_id: string
           category_id: string
           period_id: string
-          amount: number
+          amount?: number
           confidence?: number
           source?: string
           source_document_id?: string | null
@@ -196,192 +245,191 @@ export type Database = {
         }
         Relationships: []
       }
-      entities: {
-        Row: {
-          id: string
-          name: string
-          abn: string | null
-          entity_group_id: string
-          bank_account_id: string | null
-          is_active: boolean
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          name: string
-          abn?: string | null
-          entity_group_id: string
-          bank_account_id?: string | null
-          is_active?: boolean
-          created_at?: string
-        }
-        Update: {
-          name?: string
-          abn?: string | null
-          entity_group_id?: string
-          bank_account_id?: string | null
-          is_active?: boolean
-        }
-        Relationships: []
-      }
-      entity_groups: {
-        Row: {
-          id: string
-          name: string
-          od_facility_limit: number
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          name: string
-          od_facility_limit?: number
-          created_at?: string
-        }
-        Update: {
-          name?: string
-          od_facility_limit?: number
-        }
-        Relationships: []
-      }
-      categories: {
-        Row: {
-          id: string
-          parent_id: string | null
-          name: string
-          code: string
-          section_number: string | null
-          sort_order: number
-          flow_direction: string
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          parent_id?: string | null
-          name: string
-          code: string
-          section_number?: string | null
-          sort_order?: number
-          flow_direction: string
-          created_at?: string
-        }
-        Update: {
-          parent_id?: string | null
-          name?: string
-          code?: string
-          section_number?: string | null
-          sort_order?: number
-          flow_direction?: string
-        }
-        Relationships: []
-      }
-      forecast_periods: {
-        Row: {
-          id: string
-          week_ending: string
-          is_actual: boolean
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          week_ending: string
-          is_actual?: boolean
-          created_at?: string
-        }
-        Update: {
-          week_ending?: string
-          is_actual?: boolean
-        }
-        Relationships: []
-      }
-      bank_accounts: {
-        Row: {
-          id: string
-          entity_id: string
-          bsb: string | null
-          account_number: string | null
-          account_name: string | null
-          opening_balance: number
-          balance_date: string | null
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          entity_id: string
-          bsb?: string | null
-          account_number?: string | null
-          account_name?: string | null
-          opening_balance?: number
-          balance_date?: string | null
-          created_at?: string
-        }
-        Update: {
-          bsb?: string | null
-          account_number?: string | null
-          account_name?: string | null
-          opening_balance?: number
-          balance_date?: string | null
-        }
-        Relationships: []
-      }
       scenarios: {
         Row: {
           id: string
-          entity_id: string
           name: string
-          scenario_type: string
-          pipeline_confidence_multiplier: number
-          is_active: boolean
+          description: string | null
+          is_default: boolean
           created_by: string | null
           created_at: string
           updated_at: string
         }
         Insert: {
           id?: string
-          entity_id: string
           name: string
-          scenario_type: string
-          pipeline_confidence_multiplier?: number
-          is_active?: boolean
+          description?: string | null
+          is_default?: boolean
           created_by?: string | null
           created_at?: string
           updated_at?: string
         }
         Update: {
           name?: string
-          scenario_type?: string
-          pipeline_confidence_multiplier?: number
-          is_active?: boolean
+          description?: string | null
+          is_default?: boolean
           updated_at?: string
         }
         Relationships: []
       }
-      intercompany_transactions: {
+      scenario_overrides: {
         Row: {
           id: string
-          from_entity_id: string
-          to_entity_id: string
-          amount: number
-          description: string | null
-          period_id: string
-          status: string
-          created_by: string | null
+          scenario_id: string
+          target_type: string
+          target_id: string
+          override_confidence: number | null
+          override_amount: number | null
+          override_week_shift: number
+          is_excluded: boolean
           created_at: string
         }
         Insert: {
           id?: string
-          from_entity_id: string
-          to_entity_id: string
-          amount: number
-          description?: string | null
-          period_id: string
-          status?: string
-          created_by?: string | null
+          scenario_id: string
+          target_type: string
+          target_id: string
+          override_confidence?: number | null
+          override_amount?: number | null
+          override_week_shift?: number
+          is_excluded?: boolean
           created_at?: string
         }
         Update: {
-          amount?: number
-          description?: string | null
+          scenario_id?: string
+          target_type?: string
+          target_id?: string
+          override_confidence?: number | null
+          override_amount?: number | null
+          override_week_shift?: number
+          is_excluded?: boolean
+        }
+        Relationships: []
+      }
+      documents: {
+        Row: {
+          id: string
+          filename: string
+          mime_type: string
+          file_size: number
+          storage_path: string
+          status: string
+          doc_type: string | null
+          error_message: string | null
+          uploaded_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          filename: string
+          mime_type: string
+          file_size: number
+          storage_path: string
           status?: string
+          doc_type?: string | null
+          error_message?: string | null
+          uploaded_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          filename?: string
+          mime_type?: string
+          file_size?: number
+          storage_path?: string
+          status?: string
+          doc_type?: string | null
+          error_message?: string | null
+          uploaded_by?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      document_extractions: {
+        Row: {
+          id: string
+          document_id: string
+          entity_name: string | null
+          category_name: string | null
+          counterparty: string | null
+          amount: number | null
+          expected_date: string | null
+          payment_terms: string | null
+          invoice_number: string | null
+          confidence: number
+          raw_text: string | null
+          is_confirmed: boolean
+          is_dismissed: boolean
+          forecast_line_id: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          document_id: string
+          entity_name?: string | null
+          category_name?: string | null
+          counterparty?: string | null
+          amount?: number | null
+          expected_date?: string | null
+          payment_terms?: string | null
+          invoice_number?: string | null
+          confidence?: number
+          raw_text?: string | null
+          is_confirmed?: boolean
+          is_dismissed?: boolean
+          forecast_line_id?: string | null
+          created_at?: string
+        }
+        Update: {
+          entity_name?: string | null
+          category_name?: string | null
+          counterparty?: string | null
+          amount?: number | null
+          expected_date?: string | null
+          payment_terms?: string | null
+          invoice_number?: string | null
+          confidence?: number
+          raw_text?: string | null
+          is_confirmed?: boolean
+          is_dismissed?: boolean
+          forecast_line_id?: string | null
+        }
+        Relationships: []
+      }
+      intercompany_balances: {
+        Row: {
+          id: string
+          from_group_id: string
+          to_group_id: string
+          description: string
+          amount: number
+          as_at_date: string
+          notes: string | null
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          from_group_id: string
+          to_group_id: string
+          description: string
+          amount: number
+          as_at_date: string
+          notes?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          from_group_id?: string
+          to_group_id?: string
+          description?: string
+          amount?: number
+          as_at_date?: string
+          notes?: string | null
+          updated_at?: string
         }
         Relationships: []
       }

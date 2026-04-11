@@ -6,8 +6,7 @@ import { ForecastGrid } from '@/components/forecast/forecast-grid'
 import { loadForecastData } from '@/lib/forecast/queries'
 import { computeWeekSummaries } from '@/lib/forecast/engine'
 import { generateRecurringLines } from '@/lib/forecast/recurring'
-
-const COACHMATE_GROUP_ID = 'a0000000-0000-0000-0000-000000000002'
+import { COACHMATE_GROUP_ID } from '@/lib/types'
 
 const forecastTabs = [
   { label: 'Augusto Group', href: '/forecast' },
@@ -42,7 +41,7 @@ export default async function CoachmateForecastPage({
   return (
     <div>
       <div className="mb-4"><h1 className="text-xl font-semibold">Cash Flow Forecast — Coachmate</h1></div>
-      <SummaryCards currentWeek={summaries[0] ?? null} weeksUntilBreach={breachWeek >= 0 ? breachWeek : null} pipelineTotal={pipelineTotal} pipelineWeighted={Math.round(pipelineWeighted)} />
+      <SummaryCards currentWeek={summaries[0] ?? null} weeksUntilBreach={breachWeek >= 0 ? breachWeek : null} pipelineTotal={pipelineTotal} pipelineWeighted={Math.round(pipelineWeighted)} odFacilityLimit={0} />
       <Tabs tabs={forecastTabs} />
       <ScenarioToolbar scenarios={scenarios ?? []} weekRange={`${data.periods.length} weeks`} />
       <ForecastGrid periods={data.periods} categories={data.categories} lines={allLines} summaries={summaries} />

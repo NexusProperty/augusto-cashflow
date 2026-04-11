@@ -6,9 +6,10 @@ interface SummaryCardsProps {
   weeksUntilBreach: number | null
   pipelineTotal: number
   pipelineWeighted: number
+  odFacilityLimit: number
 }
 
-export function SummaryCards({ currentWeek, weeksUntilBreach, pipelineTotal, pipelineWeighted }: SummaryCardsProps) {
+export function SummaryCards({ currentWeek, weeksUntilBreach, pipelineTotal, pipelineWeighted, odFacilityLimit }: SummaryCardsProps) {
   return (
     <div className="mb-5 grid grid-cols-4 gap-3">
       <Card
@@ -21,7 +22,7 @@ export function SummaryCards({ currentWeek, weeksUntilBreach, pipelineTotal, pip
         label="OD Headroom"
         value={currentWeek ? formatCurrency(currentWeek.availableCash) : '—'}
         valueColor={currentWeek && currentWeek.availableCash > 0 ? 'text-positive' : 'text-negative'}
-        subtext={currentWeek ? `$900k facility` : ''}
+        subtext={currentWeek ? `${formatCurrency(odFacilityLimit)} facility` : ''}
       />
       <Card
         label="Weeks Until OD Breach"

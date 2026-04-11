@@ -87,3 +87,11 @@ create policy "authenticated_upload" on storage.objects
 create policy "authenticated_read" on storage.objects
   for select to authenticated
   using (bucket_id = 'documents');
+
+create policy "authenticated_update" on storage.objects
+  for update to authenticated
+  using (bucket_id = 'documents');
+
+create policy "authenticated_delete" on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'documents');

@@ -11,9 +11,9 @@ const RecurringRuleSchema = z.object({
   description: z.string().min(1),
   amount: z.coerce.number(),
   frequency: z.enum(['weekly', 'fortnightly', 'monthly']),
-  anchorDate: z.string(),
+  anchorDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD'),
   dayOfMonth: z.coerce.number().int().min(1).max(31).optional(),
-  endDate: z.string().optional(),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD').optional().or(z.literal('')),
   counterparty: z.string().optional(),
 })
 
@@ -48,8 +48,11 @@ export async function createRecurringRule(formData: FormData) {
 
 export async function deleteRecurringRule(ruleId: string) {
   await requireAuth()
+  const parsed = z.string().uuid().safeParse(ruleId)
+  if (!parsed.success) return { error: 'Invalid rule ID' }
+
   const admin = createAdminClient()
-  const { error } = await admin.from('recurring_rules').delete().eq('id', ruleId)
+  const { error } = await admin.from('recurring_rules').delete().eq('id', parsed.data)
   if (error) return { error: 'Failed to delete' }
   revalidatePath('/settings/recurring')
   revalidatePath('/forecast')
@@ -58,8 +61,11 @@ export async function deleteRecurringRule(ruleId: string) {
 
 export async function toggleRuleActive(ruleId: string, isActive: boolean) {
   await requireAuth()
+  const parsedId = z.string().uuid().safeParse(ruleId)
+  if (!parsedId.success) return { error: 'Invalid rule ID' }
+
   const admin = createAdminClient()
-  await admin.from('recurring_rules').update({ is_active: isActive }).eq('id', ruleId)
+  await admin.from('recurring_rules').update({ is_active: isActive }).eq('id', parsedId.data)
   revalidatePath('/settings/recurring')
   revalidatePath('/forecast')
   return { ok: true }

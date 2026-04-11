@@ -39,12 +39,13 @@ export function detectAlerts(
     const prev = summaries[i - 1].closingBalance
     const curr = summaries[i].closingBalance
     if (prev !== 0) {
-      const change = Math.abs((curr - prev) / prev)
-      if (change > 0.5) {
+      const signedChange = (curr - prev) / prev
+      const changeAbs = Math.abs(signedChange)
+      if (changeAbs > 0.5) {
         alerts.push({
           type: 'material_change',
           periodId: summaries[i].periodId,
-          message: `${change > 0 ? 'Swing' : 'Drop'} of ${Math.round(change * 100)}% from previous week`,
+          message: `${signedChange < 0 ? 'Drop' : 'Swing'} of ${Math.round(changeAbs * 100)}% from previous week`,
           severity: 'warning',
         })
       }

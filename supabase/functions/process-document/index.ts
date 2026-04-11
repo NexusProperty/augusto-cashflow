@@ -78,13 +78,21 @@ Deno.serve(async (req) => {
       return new Response('No AI response', { status: 500 })
     }
 
-    const parsed = JSON.parse(content)
+    let parsed: any
+    try {
+      parsed = JSON.parse(content)
+    } catch {
+      await supabase.from('documents').update({ status: 'failed', error_message: 'Invalid JSON from AI' }).eq('id', documentId)
+      return new Response('Invalid JSON', { status: 500 })
+    }
 
-    await supabase.from('documents').update({
-      doc_type: parsed.classification?.documentType ?? 'other',
-    }).eq('id', documentId)
+    // Validate classification
+    const validDocTypes = ['aged_receivables', 'aged_payables', 'bank_statement', 'invoice', 'loan_agreement', 'payroll_summary', 'contract', 'board_paper', 'other']
+    const docType = validDocTypes.includes(parsed.classification?.documentType) ? parsed.classification.documentType : 'other'
 
-    const items = parsed.items ?? []
+    await supabase.from('documents').update({ doc_type: docType }).eq('id', documentId)
+
+    const items = Array.isArray(parsed.items) ? parsed.items : []
     if (items.length > 0) {
       const rows = items.map((item: any) => ({
         document_id: documentId,
@@ -116,7 +124,7 @@ Deno.serve(async (req) => {
 function buildExtractionPrompt(filename: string): string {
   return `You are a financial document analyst for Augusto Group, a New Zealand creative/advertising agency group.
 
-Analyze this document and extract ALL financially relevant items. The document filename is: ${filename}
+Analyze this document and extract ALL financially relevant items. The document filename is: ${sanitizeFilename(filename)}
 
 Respond with JSON in this exact format:
 {
@@ -130,7 +138,7 @@ Respond with JSON in this exact format:
       "amount": 12345.67,
       "expectedDate": "2026-04-10",
       "invoiceNumber": "INV-001" or null,
-      "entityName": "Augusto" | "Cornerstone" | "Dark Doris" | "Coachmate" | "Ballyhoo" | "Wrestler" | null,
+      "entityName": "Augusto" | "Cornerstore" | "Dark Doris" | "Coachmate" | "Ballyhoo" | "Wrestler" | null,
       "categoryHint": "accounts_receivable" | "accounts_payable" | "payroll" | "rent" | "loan" | "other",
       "paymentTerms": "60 days" or null,
       "confidence": 0.0 to 1.0,
@@ -148,4 +156,9 @@ Rules:
 - For bank statements, extract each transaction
 - If you can identify which Augusto Group entity this relates to, set entityName
 - Set confidence based on how certain you are about each extraction`
+}
+
+function sanitizeFilename(filename: string): string {
+  // Strip anything that isn't alphanumeric, dots, dashes, underscores, or spaces
+  return filename.replace(/[^a-zA-Z0-9.\-_ ]/g, '').slice(0, 100)
 }
