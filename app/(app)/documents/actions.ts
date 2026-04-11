@@ -172,3 +172,102 @@ export async function dismissExtraction(extractionId: string) {
   revalidatePath('/documents')
   return { ok: true }
 }
+
+export async function bulkConfirmExtractions(extractionIds: string[]) {
+  const user = await requireAuth()
+  if (extractionIds.length === 0) return { error: 'No extraction IDs provided' }
+
+  const admin = createAdminClient()
+
+  // Fetch all extractions
+  const { data: extractions, error: fetchErr } = await admin
+    .from('document_extractions')
+    .select('*')
+    .in('id', extractionIds)
+
+  if (fetchErr || !extractions) return { error: 'Failed to fetch extractions' }
+
+  // Validate all have complete suggestions
+  const incomplete = extractions.filter(ext =>
+    !ext.suggested_entity_id ||
+    !ext.suggested_bank_account_id ||
+    !ext.suggested_category_id ||
+    !ext.suggested_period_id ||
+    !ext.suggested_status
+  )
+
+  if (incomplete.length > 0) {
+    return { error: `${incomplete.length} extraction(s) have incomplete field resolution` }
+  }
+
+  // Create forecast lines in batch
+  const lineRows = extractions.map(ext => ({
+    entity_id: ext.suggested_entity_id!,
+    category_id: ext.suggested_category_id!,
+    period_id: ext.suggested_period_id!,
+    bank_account_id: ext.suggested_bank_account_id!,
+    amount: ext.amount ?? 0,
+    confidence: Math.round((ext.confidence ?? 0.5) * 100),
+    source: 'document' as const,
+    line_status: ext.suggested_status!,
+    source_document_id: ext.document_id,
+    counterparty: ext.counterparty,
+    notes: ext.invoice_number ? `Invoice: ${ext.invoice_number}` : null,
+    created_by: user.id,
+  }))
+
+  const { data: lines, error: lineErr } = await admin
+    .from('forecast_lines')
+    .insert(lineRows)
+    .select()
+
+  if (lineErr || !lines) return { error: 'Failed to create forecast lines' }
+
+  // Mark extractions as confirmed
+  for (let i = 0; i < extractions.length; i++) {
+    await admin
+      .from('document_extractions')
+      .update({ is_confirmed: true, forecast_line_id: lines[i].id })
+      .eq('id', extractions[i].id)
+  }
+
+  revalidatePath('/documents')
+  revalidatePath('/forecast')
+  return { data: { confirmedCount: lines.length } }
+}
+
+export async function undoAutoConfirm(extractionId: string) {
+  await requireAuth()
+  const admin = createAdminClient()
+
+  const { data: extraction, error: fetchErr } = await admin
+    .from('document_extractions')
+    .select('*')
+    .eq('id', extractionId)
+    .single()
+
+  if (fetchErr || !extraction) return { error: 'Extraction not found' }
+  if (!extraction.auto_confirmed) return { error: 'Extraction was not auto-confirmed' }
+
+  // Delete the auto-created forecast line
+  if (extraction.forecast_line_id) {
+    await admin
+      .from('forecast_lines')
+      .delete()
+      .eq('id', extraction.forecast_line_id)
+  }
+
+  // Reset extraction state
+  await admin
+    .from('document_extractions')
+    .update({
+      is_confirmed: false,
+      auto_confirmed: false,
+      forecast_line_id: null,
+    })
+    .eq('id', extractionId)
+
+  revalidatePath('/documents')
+  revalidatePath('/forecast')
+  return { ok: true }
+}
