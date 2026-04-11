@@ -25,11 +25,11 @@ export function generateRecurringLines(
     (a, b) => new Date(a.weekEnding).getTime() - new Date(b.weekEnding).getTime()
   )
 
-  return occurrences.map((date) => {
+  const results: Omit<ForecastLine, 'id'>[] = []
+  for (const date of occurrences) {
     const period = findPeriodForDate(date, sortedPeriods)
-    if (!period) return null
-
-    return {
+    if (!period) continue
+    results.push({
       entityId: rule.entityId,
       categoryId: rule.categoryId,
       periodId: period.id,
@@ -40,8 +40,9 @@ export function generateRecurringLines(
       notes: rule.description,
       sourceDocumentId: null,
       sourceRuleId: rule.id,
-    }
-  }).filter((l): l is Omit<ForecastLine, 'id'> => l !== null)
+    })
+  }
+  return results
 }
 
 function computeOccurrences(rule: RecurringRule, periods: Period[]): Date[] {

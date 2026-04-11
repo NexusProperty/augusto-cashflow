@@ -63,13 +63,17 @@ export async function confirmExtraction(extractionId: string, overrides?: {
 
   if (fetchErr || !extraction) return { error: 'Extraction not found' }
 
+  const entityId = overrides?.entityId ?? extraction.entity_name ?? ''
+  const categoryId = overrides?.categoryId ?? extraction.category_name ?? ''
+  const periodId = overrides?.periodId ?? ''
+
   const { data: line, error: lineErr } = await admin
     .from('forecast_lines')
     .insert({
-      entity_id: overrides?.entityId ?? extraction.entity_name,
-      category_id: overrides?.categoryId ?? extraction.category_name,
-      period_id: overrides?.periodId,
-      amount: overrides?.amount ?? extraction.amount,
+      entity_id: entityId,
+      category_id: categoryId,
+      period_id: periodId,
+      amount: overrides?.amount ?? extraction.amount ?? 0,
       confidence: 100,
       source: 'document',
       source_document_id: extraction.document_id,

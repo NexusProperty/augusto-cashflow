@@ -30,7 +30,7 @@ export function ForecastGrid({ periods, categories, lines, summaries }: Forecast
     const fd = new FormData()
     fd.set('lineId', lineId)
     fd.set('amount', String(amount))
-    startTransition(() => updateLineAmount(fd))
+    startTransition(() => { updateLineAmount(fd) })
   }
 
   const sections = categories
