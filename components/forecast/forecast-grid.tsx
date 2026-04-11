@@ -2,6 +2,7 @@
 
 import { useTransition } from 'react'
 import { ForecastRow } from './forecast-row'
+import { Badge } from '@/components/ui/badge'
 import { updateLineAmount } from '@/app/(app)/forecast/actions'
 import { weekEndingLabel, formatCurrency } from '@/lib/utils'
 import type { ForecastLine, Period, Category, WeekSummary } from '@/lib/types'
@@ -177,18 +178,24 @@ function SectionBlock({ section, sectionChildren, categories, linesByCategoryAnd
           if (!cat) return false
           return cat.parentId === section.id || sectionChildren.some((sc) => sc.id === cat.parentId || sc.id === cat.id)
         })
-        .map((line) => (
-          <ForecastRow
-            key={line.id}
-            label={line.counterparty ?? line.notes ?? 'Line item'}
-            lines={new Map([[line.periodId, line]])}
-            periods={periods}
-            depth={2}
-            source={line.source}
-            confidence={line.confidence}
-            onCellSave={(_periodId, amount) => onCellSave(line.id, amount)}
-          />
-        ))
+        .map((line) => {
+          const isPipeline = line.source === 'pipeline'
+          return (
+            <ForecastRow
+              key={line.id}
+              label={line.counterparty ?? line.notes ?? 'Line item'}
+              lines={new Map([[line.periodId, line]])}
+              periods={periods}
+              depth={2}
+              source={line.source}
+              confidence={line.confidence}
+              onCellSave={isPipeline ? undefined : (_periodId, amount) => onCellSave(line.id, amount)}
+              readOnlyCells={isPipeline}
+              badge={isPipeline ? <Badge variant="pipeline" className="ml-1.5">Pipeline</Badge> : undefined}
+              title={isPipeline && line.counterparty ? line.counterparty : undefined}
+            />
+          )
+        })
       }
     </>
   )

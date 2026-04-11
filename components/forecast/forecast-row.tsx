@@ -13,6 +13,9 @@ interface ForecastRowProps {
   source?: SourceType
   confidence?: number
   onCellSave?: (periodId: string, amount: number) => void
+  badge?: React.ReactNode
+  title?: string
+  readOnlyCells?: boolean
 }
 
 const depthStyles: Record<number, string> = {
@@ -29,7 +32,7 @@ const sourceColors: Record<SourceType, string> = {
 }
 
 export function ForecastRow({
-  label, lines, periods, depth, isSubtotal, isTotal, isComputed, source, confidence, onCellSave,
+  label, lines, periods, depth, isSubtotal, isTotal, isComputed, source, confidence, onCellSave, badge, title, readOnlyCells,
 }: ForecastRowProps) {
   const rowClass = cn(
     isTotal && 'bg-zinc-900 text-white font-bold border-t-2 border-zinc-300',
@@ -40,12 +43,13 @@ export function ForecastRow({
   const paddingLeft = depth === 2 ? 'pl-10' : depth === 1 ? 'pl-6' : 'pl-3'
 
   return (
-    <tr className={rowClass}>
+    <tr className={rowClass} title={title}>
       <td className={cn('sticky left-0 z-10 bg-inherit whitespace-nowrap py-1.5 pr-4 text-sm', paddingLeft)}>
         {source && (
           <span className={cn('mr-1.5 text-[8px]', sourceColors[source])}>●</span>
         )}
         {label}
+        {badge}
         {confidence !== undefined && confidence < 100 && (
           <span className="ml-1.5 text-xs text-amber-600">{confidence}%</span>
         )}
@@ -59,7 +63,7 @@ export function ForecastRow({
             key={p.id}
             value={amount}
             isNegative={amount < 0}
-            isComputed={isComputed || isSubtotal || isTotal || depth === 0}
+            isComputed={isComputed || isSubtotal || isTotal || depth === 0 || readOnlyCells}
             lineStatus={line?.lineStatus}
             onSave={(newAmount) => onCellSave?.(p.id, newAmount)}
           />
