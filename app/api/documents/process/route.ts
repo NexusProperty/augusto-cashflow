@@ -3,8 +3,13 @@ import { NextResponse } from 'next/server'
 import ExcelJS from 'exceljs'
 import { parse as csvParse } from 'csv-parse/sync'
 import mammoth from 'mammoth'
+import { ExtractionResult } from '@/lib/documents/extraction-schema'
+import { fetchReferenceData, formatReferenceDataForPrompt } from '@/lib/documents/reference-data'
+import { buildContextPrompt } from '@/lib/documents/extraction-prompt'
+import { resolveExtraction, isFullyResolved } from '@/lib/documents/resolve-extraction'
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
+const AUTO_CONFIRM_THRESHOLD = 0.9
 
 async function extractText(blob: Blob, mimeType: string): Promise<string> {
   const buffer = Buffer.from(await blob.arrayBuffer())
@@ -41,7 +46,6 @@ async function extractText(blob: Blob, mimeType: string): Promise<string> {
   }
 
   if (mimeType === 'application/pdf') {
-    // pdf-parse has issues in Next.js edge/serverless — use raw text fallback
     try {
       const pdfParse = (await import('pdf-parse')).default
       const result = await pdfParse(buffer)
@@ -74,12 +78,13 @@ export async function POST(req: Request) {
     // Update status to parsing
     await supabase.from('documents').update({ status: 'parsing' }).eq('id', documentId)
 
-    // Download file from storage
-    const { data: fileData, error: dlErr } = await supabase.storage
-      .from('documents')
-      .download(doc.storage_path)
+    // Download file + fetch reference data in parallel
+    const [fileResult, refData] = await Promise.all([
+      supabase.storage.from('documents').download(doc.storage_path),
+      fetchReferenceData(),
+    ])
 
-    if (dlErr || !fileData) {
+    if (fileResult.error || !fileResult.data) {
       await supabase.from('documents').update({ status: 'failed', error_message: 'Download failed' }).eq('id', documentId)
       return NextResponse.json({ error: 'Download failed' }, { status: 500 })
     }
@@ -87,26 +92,28 @@ export async function POST(req: Request) {
     // Update status to extracting
     await supabase.from('documents').update({ status: 'extracting' }).eq('id', documentId)
 
-    // Prepare content for AI
-    const isImage = doc.mime_type.startsWith('image/')
+    // Build context-injected prompt
+    const refBlock = formatReferenceDataForPrompt(refData)
     const sanitizedName = sanitizeFilename(doc.filename)
 
+    const isImage = doc.mime_type.startsWith('image/')
     let messages: any[]
+
     if (isImage) {
-      const buffer = await fileData.arrayBuffer()
+      const buffer = await fileResult.data.arrayBuffer()
       const base64 = Buffer.from(buffer).toString('base64')
       messages = [{
         role: 'user',
         content: [
-          { type: 'text', text: buildExtractionPrompt(sanitizedName) },
+          { type: 'text', text: buildContextPrompt(sanitizedName, refBlock) },
           { type: 'image_url', image_url: { url: `data:${doc.mime_type};base64,${base64}` } },
         ],
       }]
     } else {
-      const textContent = await extractText(fileData, doc.mime_type)
+      const textContent = await extractText(fileResult.data, doc.mime_type)
       messages = [{
         role: 'user',
-        content: buildExtractionPrompt(sanitizedName) + '\n\n---\n\nDOCUMENT CONTENT:\n\n' + textContent.slice(0, 50000),
+        content: buildContextPrompt(sanitizedName, refBlock) + '\n\n---\n\nDOCUMENT CONTENT:\n\n' + textContent.slice(0, 50000),
       }]
     }
 
@@ -138,6 +145,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'No AI response' }, { status: 500 })
     }
 
+    // Parse and validate with Zod
     let parsed: any
     try {
       parsed = JSON.parse(content)
@@ -146,75 +154,113 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid JSON' }, { status: 500 })
     }
 
-    // Validate classification
-    const validDocTypes = ['aged_receivables', 'aged_payables', 'bank_statement', 'invoice', 'loan_agreement', 'payroll_summary', 'contract', 'board_paper', 'other']
-    const docType = validDocTypes.includes(parsed.classification?.documentType) ? parsed.classification.documentType : 'other'
+    const validated = ExtractionResult.safeParse(parsed)
+    if (!validated.success) {
+      await supabase.from('documents').update({ status: 'failed', error_message: `Schema validation: ${validated.error.message.slice(0, 200)}` }).eq('id', documentId)
+      return NextResponse.json({ error: 'Schema validation failed' }, { status: 500 })
+    }
 
-    await supabase.from('documents').update({ doc_type: docType }).eq('id', documentId)
+    const { classification, items } = validated.data
 
-    // Insert extractions
-    const items = Array.isArray(parsed.items) ? parsed.items : []
+    // Update doc type
+    await supabase.from('documents').update({ doc_type: classification.documentType }).eq('id', documentId)
+
+    // Resolve and insert extractions
+    let autoConfirmedCount = 0
+
     if (items.length > 0) {
-      const rows = items.map((item: any) => ({
-        document_id: documentId,
-        counterparty: item.counterparty,
-        amount: item.amount,
-        expected_date: item.expectedDate,
-        invoice_number: item.invoiceNumber,
-        entity_name: item.entityName,
-        category_name: item.categoryHint,
-        payment_terms: item.paymentTerms,
-        confidence: item.confidence ?? 0.5,
-        raw_text: item.rawText?.slice(0, 1000),
-      }))
+      const rows = items.map(item => {
+        const resolved = resolveExtraction({
+          entityCode: item.entityCode,
+          bankAccountNumber: item.bankAccountNumber,
+          categoryCode: item.categoryCode,
+          suggestedWeekEnding: item.suggestedWeekEnding,
+          suggestedStatus: item.suggestedStatus,
+        }, refData)
 
-      await supabase.from('document_extractions').insert(rows)
+        return {
+          document_id: documentId,
+          counterparty: item.counterparty,
+          amount: item.amount,
+          expected_date: item.expectedDate,
+          invoice_number: item.invoiceNumber,
+          entity_name: item.entityCode,
+          category_name: item.categoryCode,
+          payment_terms: item.paymentTerms,
+          confidence: item.confidence,
+          raw_text: item.rawText?.slice(0, 1000),
+          suggested_entity_id: resolved.entityId,
+          suggested_bank_account_id: resolved.bankAccountId,
+          suggested_category_id: resolved.categoryId,
+          suggested_period_id: resolved.periodId,
+          suggested_status: resolved.status,
+          status_reason: item.statusReason,
+        }
+      })
+
+      const { data: insertedRows } = await supabase
+        .from('document_extractions')
+        .insert(rows)
+        .select()
+
+      // Auto-confirm high-confidence, fully-resolved items
+      if (insertedRows) {
+        for (const ext of insertedRows) {
+          const resolved = {
+            entityId: ext.suggested_entity_id,
+            bankAccountId: ext.suggested_bank_account_id,
+            categoryId: ext.suggested_category_id,
+            periodId: ext.suggested_period_id,
+            status: ext.suggested_status,
+          }
+
+          if (ext.confidence >= AUTO_CONFIRM_THRESHOLD && isFullyResolved(resolved)) {
+            const { data: line } = await supabase
+              .from('forecast_lines')
+              .insert({
+                entity_id: resolved.entityId!,
+                category_id: resolved.categoryId!,
+                period_id: resolved.periodId!,
+                bank_account_id: resolved.bankAccountId!,
+                amount: ext.amount ?? 0,
+                confidence: Math.round(ext.confidence * 100),
+                source: 'document',
+                line_status: resolved.status!,
+                source_document_id: documentId,
+                counterparty: ext.counterparty,
+                notes: ext.invoice_number ? `Invoice: ${ext.invoice_number}` : null,
+              })
+              .select()
+              .single()
+
+            if (line) {
+              await supabase
+                .from('document_extractions')
+                .update({
+                  is_confirmed: true,
+                  auto_confirmed: true,
+                  forecast_line_id: line.id,
+                })
+                .eq('id', ext.id)
+
+              autoConfirmedCount++
+            }
+          }
+        }
+      }
     }
 
     // Mark as ready for review
     await supabase.from('documents').update({ status: 'ready_for_review' }).eq('id', documentId)
 
-    return NextResponse.json({ ok: true, extractionCount: items.length })
+    return NextResponse.json({
+      ok: true,
+      extractionCount: items.length,
+      autoConfirmedCount,
+    })
   } catch (err) {
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
-}
-
-function buildExtractionPrompt(filename: string): string {
-  return `You are a financial document analyst for Augusto Group, a New Zealand creative/advertising agency group.
-
-Analyze this document and extract ALL financially relevant items. The document filename is: ${filename}
-
-Respond with JSON in this exact format:
-{
-  "classification": {
-    "documentType": "aged_receivables" | "aged_payables" | "bank_statement" | "invoice" | "loan_agreement" | "payroll_summary" | "contract" | "board_paper" | "other",
-    "confidence": 0.0 to 1.0
-  },
-  "items": [
-    {
-      "counterparty": "Client or supplier name",
-      "amount": 12345.67,
-      "expectedDate": "2026-04-10",
-      "invoiceNumber": "INV-001" or null,
-      "entityName": "Augusto" | "Cornerstore" | "Dark Doris" | "Coachmate" | "Ballyhoo" | "Wrestler" | null,
-      "categoryHint": "accounts_receivable" | "accounts_payable" | "payroll" | "rent" | "loan" | "other",
-      "paymentTerms": "60 days" or null,
-      "confidence": 0.0 to 1.0,
-      "rawText": "The source text this was extracted from"
-    }
-  ]
-}
-
-Rules:
-- Extract EVERY line item with a dollar amount
-- Amounts should be in NZD (convert if needed, noting the original currency)
-- Positive amounts = money coming in (receivables, receipts)
-- Negative amounts = money going out (payables, expenses)
-- For aged debtor/creditor reports, extract each invoice as a separate item
-- For bank statements, extract each transaction
-- If you can identify which Augusto Group entity this relates to, set entityName
-- Set confidence based on how certain you are about each extraction`
 }
 
 function sanitizeFilename(filename: string): string {
