@@ -42,6 +42,12 @@ interface Extraction {
   confidence: number | null
   raw_text: string | null
   documents: { filename: string } | null
+  suggested_entity_id: string | null
+  suggested_bank_account_id: string | null
+  suggested_category_id: string | null
+  suggested_period_id: string | null
+  suggested_status: string | null
+  status_reason: string | null
 }
 
 export function ExtractionReviewCard({
@@ -63,46 +69,13 @@ export function ExtractionReviewCard({
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
 
-  // Auto-match entity from extraction
-  const matchedEntity = extraction.entity_name
-    ? entities.find(e => e.name.toLowerCase() === extraction.entity_name!.toLowerCase())
-    : undefined
-
-  // Auto-match category from extraction hint
-  const categoryHintMap: Record<string, string> = {
-    accounts_receivable: 'inflows_ar',
-    accounts_payable: 'outflows_ap',
-    payroll: 'outflows_payroll',
-    rent: 'outflows_rent',
-    loan: 'loans',
-  }
-  const hintCode = extraction.category_name ? categoryHintMap[extraction.category_name] : undefined
-  const matchedCategory = hintCode
-    ? categories.find(c => c.code === hintCode)
-    : undefined
-
-  // Auto-match period from expected_date
-  const matchedPeriod = extraction.expected_date
-    ? periods.find(p => {
-        const weekEnd = new Date(p.week_ending)
-        const expected = new Date(extraction.expected_date!)
-        const weekStart = new Date(weekEnd)
-        weekStart.setDate(weekStart.getDate() - 6)
-        return expected >= weekStart && expected <= weekEnd
-      })
-    : undefined
-
-  // Auto-match bank account from entity
-  const matchedBankAccount = matchedEntity
-    ? bankAccounts.find(ba => ba.entity_id === matchedEntity.id)
-    : undefined
-
-  const [entityId, setEntityId] = useState(matchedEntity?.id ?? '')
-  const [categoryId, setCategoryId] = useState(matchedCategory?.id ?? '')
-  const [periodId, setPeriodId] = useState(matchedPeriod?.id ?? '')
-  const [bankAccountId, setBankAccountId] = useState(matchedBankAccount?.id ?? '')
+  // Pre-fill from server-resolved suggested_* columns
+  const [entityId, setEntityId] = useState(extraction.suggested_entity_id ?? '')
+  const [categoryId, setCategoryId] = useState(extraction.suggested_category_id ?? '')
+  const [periodId, setPeriodId] = useState(extraction.suggested_period_id ?? '')
+  const [bankAccountId, setBankAccountId] = useState(extraction.suggested_bank_account_id ?? '')
   const [amount, setAmount] = useState(extraction.amount?.toString() ?? '')
-  const [lineStatus, setLineStatus] = useState<string>('none')
+  const [lineStatus, setLineStatus] = useState<string>(extraction.suggested_status ?? 'none')
 
   if (dismissed || confirmed) return null
 
@@ -228,6 +201,9 @@ export function ExtractionReviewCard({
               <option value="speculative">Speculative</option>
               <option value="awaiting_budget_approval">Awaiting Budget Approval</option>
             </select>
+            {extraction.status_reason && (
+              <p className="mt-1 text-xs text-zinc-500 italic">{extraction.status_reason}</p>
+            )}
           </div>
 
           {/* Row 2: Entity, Category, Period */}
