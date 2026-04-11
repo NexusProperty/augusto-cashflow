@@ -1,6 +1,6 @@
 'use client'
 
-import { cn } from '@/lib/utils'
+import { cn, formatCurrencyCompact } from '@/lib/utils'
 import type { WeekSummary } from '@/lib/types'
 
 interface ClosingBalanceChartProps {
@@ -21,23 +21,35 @@ export function ClosingBalanceChart({ summaries }: ClosingBalanceChartProps) {
   return (
     <div>
       <h3 className="text-sm font-semibold text-zinc-900 mb-3">Closing Balance Trend</h3>
-      <div className="h-32 bg-zinc-50 rounded-lg flex items-end px-2 gap-0.5 pb-1">
+      <div className="h-44 bg-zinc-50 rounded-lg flex items-end px-2 gap-0.5 pb-1">
         {summaries.map((s, i) => {
           const heightPct = Math.max((Math.abs(s.closingBalance) / maxAbs) * 100, 2)
           const isNeg = s.closingBalance < 0
           const opacity = i < 6 ? 1 : Math.max(0.15, 1 - (i - 5) * 0.12)
+          const label = formatCurrencyCompact(s.closingBalance)
           return (
             <div
               key={s.periodId}
-              className={cn(
-                'flex-1 rounded-t transition-all',
-                isNeg
-                  ? 'bg-gradient-to-t from-blue-600 to-blue-400'
-                  : 'bg-gradient-to-t from-emerald-600 to-emerald-400',
-              )}
-              style={{ height: `${heightPct}%`, opacity }}
-              title={`${fmtDate(s.weekEnding)}: ${new Intl.NumberFormat('en-NZ', { style: 'currency', currency: 'NZD', maximumFractionDigits: 0 }).format(s.closingBalance)}`}
-            />
+              className="flex-1 flex flex-col items-center justify-end"
+              style={{ opacity }}
+            >
+              <span className={cn(
+                'text-[9px] font-medium tabular-nums mb-0.5',
+                isNeg ? 'text-blue-600' : 'text-emerald-600',
+              )}>
+                {label || '—'}
+              </span>
+              <div
+                className={cn(
+                  'w-full rounded-t transition-all',
+                  isNeg
+                    ? 'bg-gradient-to-t from-blue-600 to-blue-400'
+                    : 'bg-gradient-to-t from-emerald-600 to-emerald-400',
+                )}
+                style={{ height: `${heightPct}%` }}
+                title={`${fmtDate(s.weekEnding)}: ${new Intl.NumberFormat('en-NZ', { style: 'currency', currency: 'NZD', maximumFractionDigits: 0 }).format(s.closingBalance)}`}
+              />
+            </div>
           )
         })}
       </div>
