@@ -11,43 +11,46 @@ interface SummaryCardsProps {
 
 export function SummaryCards({ currentWeek, weeksUntilBreach, pipelineTotal, pipelineWeighted, odFacilityLimit }: SummaryCardsProps) {
   return (
-    <div className="mb-5 grid grid-cols-4 gap-3">
+    <div className="mb-6 grid grid-cols-4 gap-4">
       <Card
         label="Current Cash Position"
         value={currentWeek ? formatCurrency(currentWeek.closingBalance) : '—'}
-        valueColor={currentWeek && currentWeek.closingBalance < 0 ? 'text-negative' : 'text-positive'}
-        subtext={currentWeek ? `As at ${currentWeek.weekEnding}` : ''}
+        change={currentWeek ? `As at ${currentWeek.weekEnding}` : ''}
+        negative={currentWeek ? currentWeek.closingBalance < 0 : false}
       />
       <Card
         label="OD Headroom"
         value={currentWeek ? formatCurrency(currentWeek.availableCash) : '—'}
-        valueColor={currentWeek && currentWeek.availableCash > 0 ? 'text-positive' : 'text-negative'}
-        subtext={currentWeek ? `${formatCurrency(odFacilityLimit)} facility` : ''}
+        change={currentWeek ? `${formatCurrency(odFacilityLimit)} facility` : ''}
+        negative={currentWeek ? currentWeek.availableCash <= 0 : false}
       />
       <Card
         label="Weeks Until OD Breach"
-        value={weeksUntilBreach !== null ? `${weeksUntilBreach} weeks` : 'None'}
-        valueColor={weeksUntilBreach !== null && weeksUntilBreach <= 4 ? 'text-negative' : 'text-warning'}
-        subtext={weeksUntilBreach !== null ? 'Action required' : 'Position healthy'}
+        value={weeksUntilBreach !== null ? `${weeksUntilBreach}` : 'None'}
+        change={weeksUntilBreach !== null ? 'Action required' : 'Position healthy'}
+        negative={weeksUntilBreach !== null && weeksUntilBreach <= 4}
       />
       <Card
         label="Pipeline (Unconfirmed)"
         value={formatCurrency(pipelineTotal)}
-        valueColor="text-brand"
-        subtext={`Weighted: ${formatCurrency(pipelineWeighted)}`}
+        change={`Weighted: ${formatCurrency(pipelineWeighted)}`}
       />
     </div>
   )
 }
 
-function Card({ label, value, valueColor, subtext }: {
-  label: string; value: string; valueColor: string; subtext: string
+function Card({ label, value, change, negative }: {
+  label: string; value: string; change: string; negative?: boolean
 }) {
   return (
-    <div className="rounded-lg border border-border bg-surface-raised p-4">
-      <div className="text-xs uppercase tracking-wide text-text-muted">{label}</div>
-      <div className={cn('mt-1 text-2xl font-bold', valueColor)}>{value}</div>
-      <div className="mt-1 text-xs text-text-muted">{subtext}</div>
+    <div className="rounded-lg border border-zinc-200 bg-white p-5">
+      <div className="text-sm font-medium text-zinc-500">{label}</div>
+      <div className={cn('mt-1 text-2xl font-semibold tracking-tight', negative ? 'text-red-600' : 'text-zinc-900')}>
+        {value}
+      </div>
+      <div className={cn('mt-1 text-sm', negative ? 'text-red-600' : 'text-zinc-500')}>
+        {change}
+      </div>
     </div>
   )
 }

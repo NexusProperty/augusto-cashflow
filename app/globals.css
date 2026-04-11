@@ -1,24 +1,22 @@
 @import "tailwindcss";
 
-@variant dark (&:where(.dark, .dark *));
-
 @theme {
-  --color-brand: #6366f1;
-  --color-brand-subtle: color-mix(in srgb, var(--color-brand) 12%, transparent);
-  --color-positive: #4ade80;
-  --color-negative: #f87171;
-  --color-warning: #fbbf24;
-  --color-surface: #0a0a0f;
-  --color-surface-raised: #0f172a;
-  --color-surface-overlay: #1e293b;
-  --color-border: #1e293b;
-  --color-border-active: #4338ca;
-  --color-text-primary: #f8fafc;
-  --color-text-secondary: #94a3b8;
-  --color-text-muted: #64748b;
+  --color-brand: #4f46e5;
+  --color-brand-hover: #4338ca;
+  --color-positive: #16a34a;
+  --color-negative: #dc2626;
+  --color-warning: #d97706;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-surface-overlay: #f9fafb;
+  --color-border: #e5e7eb;
+  --color-border-active: #4f46e5;
+  --color-text-primary: #111827;
+  --color-text-secondary: #4b5563;
+  --color-text-muted: #9ca3af;
 
-  --color-source-manual: #94a3b8;
-  --color-source-document: #6366f1;
-  --color-source-recurring: #10b981;
-  --color-source-pipeline: #f59e0b;
+  --color-source-manual: #6b7280;
+  --color-source-document: #4f46e5;
+  --color-source-recurring: #059669;
+  --color-source-pipeline: #d97706;
 }

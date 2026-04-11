@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { Tabs } from '@/components/ui/tabs'
 import { SummaryCards } from '@/components/forecast/summary-cards'
@@ -59,12 +60,12 @@ export default async function ForecastPage({
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-xl font-semibold">Cash Flow Forecast</h1>
         <div className="flex gap-2">
-          <a href="/documents" className="rounded-md border border-border bg-surface-overlay px-4 py-2 text-sm text-text-secondary hover:text-text-primary">
+          <Link href="/documents" className="rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50">
             Upload Documents
-          </a>
-          <a href="/settings/recurring" className="rounded-md border border-border bg-surface-overlay px-4 py-2 text-sm text-text-secondary hover:text-text-primary">
+          </Link>
+          <Link href="/settings/recurring" className="rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50">
             Recurring Rules
-          </a>
+          </Link>
         </div>
       </div>
 

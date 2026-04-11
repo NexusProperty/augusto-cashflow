@@ -38,21 +38,21 @@ export function ForecastGrid({ periods, categories, lines, summaries }: Forecast
     .sort((a, b) => a.sortOrder - b.sortOrder)
 
   return (
-    <div className="overflow-x-auto rounded-b-lg border border-t-0 border-border">
+    <div className="overflow-x-auto rounded-b-lg border border-t-0 border-zinc-200">
       <table className="w-full min-w-[1200px] border-collapse text-sm">
         <thead>
-          <tr>
-            <th className="sticky left-0 z-20 min-w-[280px] bg-surface-raised px-3 py-2 text-left text-xs font-medium text-text-muted">
+          <tr className="border-b border-zinc-200">
+            <th className="sticky left-0 z-20 min-w-[280px] bg-zinc-50 px-3 py-2.5 text-left text-xs font-medium text-zinc-500">
               Item / Description
             </th>
             {periods.map((p) => (
-              <th key={p.id} className="bg-surface-raised px-2.5 py-2 text-right text-xs font-medium text-text-muted">
+              <th key={p.id} className="bg-zinc-50 px-2.5 py-2.5 text-right text-xs font-medium text-zinc-500">
                 {weekEndingLabel(new Date(p.weekEnding))}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody>
+        <tbody className="divide-y divide-zinc-100">
           {sections.map((section) => {
             const children = categories
               .filter((c) => c.parentId === section.id)
@@ -74,47 +74,50 @@ export function ForecastGrid({ periods, categories, lines, summaries }: Forecast
             )
           })}
 
-          {/* Computed summary rows */}
-          <tr className="border-t-2 border-border-active bg-[#1e1b4b] font-bold">
-            <td className="sticky left-0 z-10 bg-[#1e1b4b] px-3 py-2 text-sm">Net Operating Cash Flow</td>
+          {/* Net Operating */}
+          <tr className="border-t-2 border-zinc-300 bg-zinc-50 font-semibold">
+            <td className="sticky left-0 z-10 bg-zinc-50 px-3 py-2 text-sm text-zinc-900">Net Operating Cash Flow</td>
             {periods.map((p) => {
               const s = summaryMap.get(p.id)
               return (
-                <td key={p.id} className={`px-2.5 py-2 text-right text-sm ${s && s.netOperating < 0 ? 'text-negative' : ''}`}>
+                <td key={p.id} className={`px-2.5 py-2 text-right text-sm tabular-nums ${s && s.netOperating < 0 ? 'text-red-600' : 'text-zinc-900'}`}>
                   {s ? formatCurrency(s.netOperating) : '—'}
                 </td>
               )
             })}
           </tr>
-          <tr className="border-t-2 border-[#10b981] bg-[#042f2e] font-bold">
-            <td className="sticky left-0 z-10 bg-[#042f2e] px-3 py-2 text-sm text-[#6ee7b7]">Closing Balance</td>
+          {/* Closing Balance */}
+          <tr className="border-t border-zinc-200 bg-zinc-900 font-bold text-white">
+            <td className="sticky left-0 z-10 bg-zinc-900 px-3 py-2.5 text-sm">Closing Balance</td>
             {periods.map((p) => {
               const s = summaryMap.get(p.id)
               return (
-                <td key={p.id} className={`px-2.5 py-2 text-right text-sm font-bold ${s && s.closingBalance < 0 ? 'text-negative' : 'text-[#6ee7b7]'}`}>
+                <td key={p.id} className={`px-2.5 py-2.5 text-right text-sm tabular-nums font-bold ${s && s.closingBalance < 0 ? 'text-red-400' : 'text-white'}`}>
                   {s ? formatCurrency(s.closingBalance) : '—'}
                 </td>
               )
             })}
           </tr>
-          <tr>
-            <td className="sticky left-0 z-10 bg-surface px-3 py-1.5 text-sm text-text-secondary">Available Cash (incl. OD)</td>
+          {/* Available Cash */}
+          <tr className="border-t border-zinc-200">
+            <td className="sticky left-0 z-10 bg-white px-3 py-1.5 text-sm text-zinc-600">Available Cash (incl. OD)</td>
             {periods.map((p) => {
               const s = summaryMap.get(p.id)
               return (
-                <td key={p.id} className={`px-2.5 py-1.5 text-right text-sm ${s && s.availableCash < 0 ? 'text-negative' : 'text-positive'}`}>
+                <td key={p.id} className={`px-2.5 py-1.5 text-right text-sm tabular-nums ${s && s.availableCash < 0 ? 'text-red-600 font-semibold' : 'text-emerald-600'}`}>
                   {s ? formatCurrency(s.availableCash) : '—'}
                 </td>
               )
             })}
           </tr>
-          <tr>
-            <td className="sticky left-0 z-10 bg-surface px-3 py-1.5 text-sm text-text-secondary">OD Status</td>
+          {/* OD Status */}
+          <tr className="border-t border-zinc-100">
+            <td className="sticky left-0 z-10 bg-white px-3 py-1.5 text-sm text-zinc-500">OD Status</td>
             {periods.map((p) => {
               const s = summaryMap.get(p.id)
               return (
-                <td key={p.id} className={`px-2.5 py-1.5 text-right text-xs ${s?.isOverdrawn ? 'font-bold text-negative' : 'text-positive'}`}>
-                  {s ? (s.isOverdrawn ? '✖ OVERDRAWN' : '✔ Within OD') : '—'}
+                <td key={p.id} className={`px-2.5 py-1.5 text-right text-xs tabular-nums ${s?.isOverdrawn ? 'font-bold text-red-600' : 'text-emerald-600'}`}>
+                  {s ? (s.isOverdrawn ? 'OVERDRAWN' : 'Within OD') : '—'}
                 </td>
               )
             })}
@@ -157,12 +160,10 @@ function SectionBlock({ section, sectionChildren, categories, linesByCategoryAnd
         )
       })}
 
-      {/* Individual line items for this section */}
       {lines
         .filter((l) => {
           const cat = categories.find((c) => c.id === l.categoryId)
           if (!cat) return false
-          // Direct child of section or child of a subsection under this section
           return cat.parentId === section.id || sectionChildren.some((sc) => sc.id === cat.parentId || sc.id === cat.id)
         })
         .map((line) => (

@@ -15,7 +15,7 @@ export default async function RecurringRulesPage() {
   return (
     <div>
       <h1 className="mb-4 text-xl font-semibold">Recurring Rules</h1>
-      <p className="mb-6 text-sm text-text-muted">
+      <p className="mb-6 text-sm text-zinc-500">
         Define repeating items (payroll, rent, PAYE, loans). These auto-generate forecast lines.
       </p>
 
@@ -23,19 +23,19 @@ export default async function RecurringRulesPage() {
 
       <div className="mt-6 space-y-2">
         {(rules ?? []).map((rule: any) => (
-          <div key={rule.id} className="flex items-center justify-between rounded-lg border border-border bg-surface-raised p-4">
+          <div key={rule.id} className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white p-4">
             <div>
               <p className="text-sm font-medium">
                 {rule.description}
                 <Badge variant="recurring" className="ml-2">{rule.frequency}</Badge>
                 {!rule.is_active && <Badge variant="manual" className="ml-2">Paused</Badge>}
               </p>
-              <p className="text-xs text-text-muted">
+              <p className="text-xs text-zinc-500">
                 {rule.entities?.name} · From {rule.anchor_date}
                 {rule.end_date && ` to ${rule.end_date}`}
               </p>
             </div>
-            <span className={`text-sm font-semibold ${rule.amount < 0 ? 'text-negative' : ''}`}>
+            <span className={`text-sm font-semibold ${rule.amount < 0 ? 'text-red-600' : 'text-zinc-900'}`}>
               {formatCurrency(rule.amount)}
             </span>
           </div>

@@ -33,10 +33,10 @@ export default async function DocumentsPage() {
           </h2>
           <div className="space-y-2">
             {pendingExtractions.map((ext: any) => (
-              <div key={ext.id} className="flex items-center justify-between rounded-lg border border-border bg-surface-raised p-4">
+              <div key={ext.id} className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white p-4">
                 <div>
                   <p className="text-sm font-medium">{ext.counterparty ?? 'Unknown'}</p>
-                  <p className="text-xs text-text-muted">
+                  <p className="text-xs text-zinc-500">
                     {ext.documents?.filename} · {ext.invoice_number ?? 'No invoice #'}
                   </p>
                 </div>
@@ -44,7 +44,7 @@ export default async function DocumentsPage() {
                   <span className="text-sm font-semibold">
                     {ext.amount ? formatCurrency(ext.amount) : '—'}
                   </span>
-                  <span className="text-xs text-text-muted">
+                  <span className="text-xs text-zinc-500">
                     {ext.expected_date ?? 'No date'}
                   </span>
                 </div>
@@ -58,11 +58,11 @@ export default async function DocumentsPage() {
         <h2 className="mb-3 text-lg font-semibold">Recent Uploads</h2>
         <div className="space-y-2">
           {(documents ?? []).map((doc: any) => (
-            <div key={doc.id} className="flex items-center justify-between rounded-lg border border-border bg-surface-raised p-3">
+            <div key={doc.id} className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white p-3">
               <div className="flex items-center gap-3">
                 <div>
                   <p className="text-sm font-medium">{doc.filename}</p>
-                  <p className="text-xs text-text-muted">
+                  <p className="text-xs text-zinc-500">
                     {new Date(doc.created_at).toLocaleDateString('en-NZ')} · {Math.round(doc.file_size / 1024)}KB
                   </p>
                 </div>

@@ -16,24 +16,24 @@ interface ForecastRowProps {
 }
 
 const depthStyles: Record<number, string> = {
-  0: 'bg-[#1e1b4b] text-[#a5b4fc] font-semibold',
-  1: 'text-text-secondary',
+  0: 'bg-zinc-100 text-zinc-900 font-semibold',
+  1: 'text-zinc-600',
   2: '',
 }
 
 const sourceColors: Record<SourceType, string> = {
-  manual: 'text-source-manual',
-  document: 'text-source-document',
-  recurring: 'text-source-recurring',
-  pipeline: 'text-source-pipeline',
+  manual: 'text-zinc-400',
+  document: 'text-indigo-500',
+  recurring: 'text-emerald-500',
+  pipeline: 'text-amber-500',
 }
 
 export function ForecastRow({
   label, lines, periods, depth, isSubtotal, isTotal, isComputed, source, confidence, onCellSave,
 }: ForecastRowProps) {
   const rowClass = cn(
-    isTotal && 'bg-[#1e1b4b] font-bold border-t-2 border-border-active',
-    isSubtotal && 'bg-surface-raised font-semibold border-t border-border',
+    isTotal && 'bg-zinc-900 text-white font-bold border-t-2 border-zinc-300',
+    isSubtotal && 'bg-zinc-50 font-semibold border-t border-zinc-200',
     !isTotal && !isSubtotal && depthStyles[depth],
   )
 
@@ -46,10 +46,8 @@ export function ForecastRow({
           <span className={cn('mr-1.5 text-[8px]', sourceColors[source])}>●</span>
         )}
         {label}
-        {source === 'recurring' && <span className="ml-1 text-xs text-source-recurring">⟳</span>}
-        {source === 'document' && <span className="ml-1 text-xs text-source-document">📎</span>}
         {confidence !== undefined && confidence < 100 && (
-          <span className="ml-1.5 text-xs text-source-pipeline">{confidence}%</span>
+          <span className="ml-1.5 text-xs text-amber-600">{confidence}%</span>
         )}
       </td>
       {periods.map((p) => {

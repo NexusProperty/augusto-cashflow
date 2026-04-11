@@ -5,9 +5,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   await requireAuth()
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-screen overflow-hidden bg-white">
       <Sidebar />
-      <main className="flex-1 overflow-auto p-6">{children}</main>
+      <main className="flex-1 overflow-auto bg-zinc-50 p-8">{children}</main>
     </div>
   )
 }

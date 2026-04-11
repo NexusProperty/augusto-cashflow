@@ -24,26 +24,26 @@ export function ScenarioToolbar({ scenarios, weekRange }: {
   }
 
   return (
-    <div className="flex items-center justify-between rounded-t-lg border border-b-0 border-border bg-surface-raised px-4 py-3">
+    <div className="mt-4 flex items-center justify-between rounded-t-lg border border-b-0 border-zinc-200 bg-white px-4 py-3">
       <div className="flex items-center gap-3">
         <select
           value={currentScenario}
           onChange={(e) => setParam('scenario', e.target.value)}
-          className="rounded-md border border-border-active bg-[#1e1b4b] px-3 py-1.5 text-sm text-[#a5b4fc]"
+          className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         >
           {scenarios.map((s) => (
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}
         </select>
-        <span className="text-sm text-text-muted">{weekRange}</span>
+        <span className="text-sm text-zinc-500">{weekRange}</span>
       </div>
       <div className="flex items-center gap-3">
-        <label className="flex items-center gap-2 text-sm text-text-secondary">
+        <label className="flex items-center gap-2 text-sm text-zinc-600">
           <input
             type="checkbox"
             checked={weighted}
             onChange={(e) => setParam('weighted', String(e.target.checked))}
-            className="rounded"
+            className="rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500"
           />
           Weighted by confidence
         </label>

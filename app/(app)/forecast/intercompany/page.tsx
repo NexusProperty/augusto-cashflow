@@ -22,32 +22,32 @@ export default async function IntercompanyPage() {
       <div className="mb-4"><h1 className="text-xl font-semibold">Intercompany Balances</h1></div>
       <Tabs tabs={forecastTabs} />
 
-      <div className="mt-4 rounded-lg border border-border bg-surface-raised">
+      <div className="mt-4 rounded-lg border border-zinc-200 bg-white">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-border">
-              <th className="px-4 py-3 text-left text-xs text-text-muted">From</th>
-              <th className="px-4 py-3 text-left text-xs text-text-muted">To</th>
-              <th className="px-4 py-3 text-left text-xs text-text-muted">Description</th>
-              <th className="px-4 py-3 text-right text-xs text-text-muted">Amount</th>
-              <th className="px-4 py-3 text-right text-xs text-text-muted">As At</th>
+            <tr className="border-b border-zinc-200">
+              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">From</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">To</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">Description</th>
+              <th className="px-4 py-3 text-right text-xs font-medium text-zinc-500">Amount</th>
+              <th className="px-4 py-3 text-right text-xs font-medium text-zinc-500">As At</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-zinc-100">
             {(balances ?? []).map((b: any) => (
-              <tr key={b.id} className="border-b border-border/50">
-                <td className="px-4 py-3">{b.from_group?.name}</td>
-                <td className="px-4 py-3">{b.to_group?.name}</td>
-                <td className="px-4 py-3">{b.description}</td>
-                <td className="px-4 py-3 text-right font-medium">{formatCurrency(b.amount)}</td>
-                <td className="px-4 py-3 text-right text-text-muted">{b.as_at_date}</td>
+              <tr key={b.id}>
+                <td className="px-4 py-3 text-zinc-900">{b.from_group?.name}</td>
+                <td className="px-4 py-3 text-zinc-900">{b.to_group?.name}</td>
+                <td className="px-4 py-3 text-zinc-600">{b.description}</td>
+                <td className="px-4 py-3 text-right font-medium text-zinc-900">{formatCurrency(b.amount)}</td>
+                <td className="px-4 py-3 text-right text-zinc-500">{b.as_at_date}</td>
               </tr>
             ))}
           </tbody>
           <tfoot>
-            <tr className="border-t-2 border-border font-bold">
-              <td colSpan={3} className="px-4 py-3">Total Owed</td>
-              <td className="px-4 py-3 text-right">{formatCurrency(total)}</td>
+            <tr className="border-t-2 border-zinc-300 font-bold">
+              <td colSpan={3} className="px-4 py-3 text-zinc-900">Total Owed</td>
+              <td className="px-4 py-3 text-right text-zinc-900">{formatCurrency(total)}</td>
               <td></td>
             </tr>
           </tfoot>

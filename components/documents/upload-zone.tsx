@@ -27,7 +27,7 @@ export function UploadZone() {
   return (
     <div
       className={`rounded-lg border-2 border-dashed p-8 text-center transition-colors ${
-        isDragging ? 'border-brand bg-brand/5' : 'border-border'
+        isDragging ? 'border-indigo-400 bg-indigo-50' : 'border-zinc-300 bg-white'
       }`}
       onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
       onDragLeave={() => setIsDragging(false)}
@@ -37,13 +37,13 @@ export function UploadZone() {
         if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files)
       }}
     >
-      <p className="text-sm text-text-secondary">
+      <p className="text-sm text-zinc-600">
         {isPending ? 'Uploading...' : 'Drag & drop files here, or'}
       </p>
       <button
         onClick={() => inputRef.current?.click()}
         disabled={isPending}
-        className="mt-2 rounded-md bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand/90 disabled:opacity-50"
+        className="mt-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50"
       >
         Browse Files
       </button>
@@ -55,11 +55,11 @@ export function UploadZone() {
         accept=".pdf,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.eml,.msg,.docx,.doc"
         onChange={(e) => e.target.files && handleFiles(e.target.files)}
       />
-      <p className="mt-2 text-xs text-text-muted">
+      <p className="mt-2 text-xs text-zinc-400">
         PDF, Excel, CSV, images, emails, Word docs
       </p>
       {message && (
-        <p className={`mt-3 text-sm ${message.type === 'error' ? 'text-negative' : 'text-positive'}`}>
+        <p className={`mt-3 text-sm ${message.type === 'error' ? 'text-red-600' : 'text-emerald-600'}`}>
           {message.text}
         </p>
       )}

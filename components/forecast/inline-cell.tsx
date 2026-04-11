@@ -18,7 +18,7 @@ export function InlineCell({ value, onSave, isNegative, isComputed, className }:
 
   if (isComputed) {
     return (
-      <td className={cn('px-2.5 py-1.5 text-right text-sm', isNegative && 'text-negative', className)}>
+      <td className={cn('px-2.5 py-1.5 text-right text-sm tabular-nums', isNegative && 'text-red-600', className)}>
         {formatCurrency(value)}
       </td>
     )
@@ -41,7 +41,7 @@ export function InlineCell({ value, onSave, isNegative, isComputed, className }:
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
             if (e.key === 'Escape') setEditing(false)
           }}
-          className="w-full rounded border border-border-active bg-surface px-2 py-1 text-right text-sm text-text-primary focus:outline-none"
+          className="w-full rounded border border-indigo-500 bg-white px-2 py-1 text-right text-sm text-zinc-900 shadow-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
           autoFocus
         />
       </td>
@@ -51,9 +51,9 @@ export function InlineCell({ value, onSave, isNegative, isComputed, className }:
   return (
     <td
       className={cn(
-        'cursor-text px-2.5 py-1.5 text-right text-sm hover:bg-surface-overlay',
-        isNegative && 'text-negative',
-        value === 0 && 'text-text-muted',
+        'cursor-text px-2.5 py-1.5 text-right text-sm tabular-nums hover:bg-zinc-50',
+        isNegative && 'text-red-600',
+        value === 0 && 'text-zinc-400',
         className,
       )}
       onClick={() => {
