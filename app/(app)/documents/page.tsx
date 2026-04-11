@@ -82,7 +82,7 @@ export default async function DocumentsPage() {
                 entities={entities ?? []}
                 categories={categories ?? []}
                 periods={periods ?? []}
-                bankAccounts={(bankAccounts ?? []) as any}
+                bankAccounts={(bankAccounts ?? []) as any /* Supabase join returns entities as array */}
               />
             ))}
           </div>
@@ -104,7 +104,7 @@ export default async function DocumentsPage() {
                 entities={entities ?? []}
                 categories={categories ?? []}
                 periods={periods ?? []}
-                bankAccounts={(bankAccounts ?? []) as any}
+                bankAccounts={(bankAccounts ?? []) as any /* Supabase join returns entities as array */}
               />
             ))}
           </div>

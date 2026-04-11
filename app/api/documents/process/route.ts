@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import ExcelJS from 'exceljs'
 import { parse as csvParse } from 'csv-parse/sync'
@@ -10,6 +11,7 @@ import { resolveExtraction, isFullyResolved } from '@/lib/documents/resolve-extr
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
 const AUTO_CONFIRM_THRESHOLD = 0.9
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 async function extractText(blob: Blob, mimeType: string): Promise<string> {
   const buffer = Buffer.from(await blob.arrayBuffer())
@@ -60,8 +62,15 @@ async function extractText(blob: Blob, mimeType: string): Promise<string> {
 
 export async function POST(req: Request) {
   try {
+    // Auth: verify caller is authenticated
+    const supabaseAuth = await createClient()
+    const { data: { user } } = await supabaseAuth.auth.getUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
     const { documentId } = await req.json()
-    if (!documentId) return NextResponse.json({ error: 'Missing documentId' }, { status: 400 })
+    if (!documentId || typeof documentId !== 'string' || !UUID_RE.test(documentId)) {
+      return NextResponse.json({ error: 'Invalid or missing documentId' }, { status: 400 })
+    }
     if (!OPENROUTER_API_KEY) return NextResponse.json({ error: 'Missing OPENROUTER_API_KEY' }, { status: 500 })
 
     const supabase = createAdminClient()
@@ -130,6 +139,7 @@ export async function POST(req: Request) {
         response_format: { type: 'json_object' },
         max_tokens: 4096,
       }),
+      signal: AbortSignal.timeout(60_000),
     })
 
     if (!aiResponse.ok) {
@@ -198,15 +208,14 @@ export async function POST(req: Request) {
         }
       })
 
-      // Cast: database.types.ts is stale, missing suggested_* columns
       const { data: insertedRows } = await supabase
         .from('document_extractions')
-        .insert(rows as any)
+        .insert(rows)
         .select()
 
       // Auto-confirm high-confidence, fully-resolved items
       if (insertedRows) {
-        for (const ext of insertedRows as any[]) {
+        for (const ext of insertedRows) {
           const resolved = {
             entityId: ext.suggested_entity_id,
             bankAccountId: ext.suggested_bank_account_id,
@@ -215,7 +224,7 @@ export async function POST(req: Request) {
             status: ext.suggested_status,
           }
 
-          if (ext.confidence >= AUTO_CONFIRM_THRESHOLD && isFullyResolved(resolved)) {
+          if ((ext.confidence ?? 0) >= AUTO_CONFIRM_THRESHOLD && isFullyResolved(resolved)) {
             const { data: line } = await supabase
               .from('forecast_lines')
               .insert({
@@ -224,13 +233,13 @@ export async function POST(req: Request) {
                 period_id: resolved.periodId!,
                 bank_account_id: resolved.bankAccountId!,
                 amount: ext.amount ?? 0,
-                confidence: Math.round(ext.confidence * 100),
+                confidence: Math.round((ext.confidence ?? 0) * 100),
                 source: 'document',
                 line_status: resolved.status!,
                 source_document_id: documentId,
                 counterparty: ext.counterparty,
                 notes: ext.invoice_number ? `Invoice: ${ext.invoice_number}` : null,
-              } as any)
+              })
               .select()
               .single()
 
@@ -241,7 +250,7 @@ export async function POST(req: Request) {
                   is_confirmed: true,
                   auto_confirmed: true,
                   forecast_line_id: line.id,
-                } as any)
+                })
                 .eq('id', ext.id)
 
               autoConfirmedCount++
