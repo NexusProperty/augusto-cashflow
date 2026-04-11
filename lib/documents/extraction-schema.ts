@@ -13,8 +13,12 @@ export const ExtractionItem = z.object({
   amount: z.number().nullable(),
   expectedDate: z.string().nullable(),
   invoiceNumber: z.string().nullable(),
-  entityName: z.string().nullable(),
-  categoryHint: z.string().nullable(),
+  entityCode: z.string().nullable(),
+  bankAccountNumber: z.string().nullable(),
+  categoryCode: z.string().nullable(),
+  suggestedStatus: z.string().nullable(),
+  suggestedWeekEnding: z.string().nullable(),
+  statusReason: z.string().nullable(),
   paymentTerms: z.string().nullable(),
   confidence: z.number().min(0).max(1),
   rawText: z.string(),
@@ -25,4 +29,5 @@ export const ExtractionResult = z.object({
   items: z.array(ExtractionItem),
 })
 
+export type ExtractionItemType = z.infer<typeof ExtractionItem>
 export type ExtractionResultType = z.infer<typeof ExtractionResult>
