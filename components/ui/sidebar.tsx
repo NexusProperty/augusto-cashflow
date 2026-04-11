@@ -20,6 +20,14 @@ function DocumentIcon({ className }: { className?: string }) {
   )
 }
 
+function PipelineIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+      <path fillRule="evenodd" d="M12.577 4.878a.75.75 0 0 1 .919-.53l4.78 1.281a.75.75 0 0 1 .531.919l-1.281 4.78a.75.75 0 0 1-1.449-.387l.81-3.022a19.407 19.407 0 0 0-5.594 5.203.75.75 0 0 1-1.139.093L7 10.06l-4.72 4.72a.75.75 0 0 1-1.06-1.061l5.25-5.25a.75.75 0 0 1 1.06 0l3.074 3.073a20.923 20.923 0 0 1 5.545-5.332l-3.07-.822a.75.75 0 0 1-.502-.51Z" clipRule="evenodd" />
+    </svg>
+  )
+}
+
 function CogIcon({ className }: { className?: string }) {
   return (
     <svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
@@ -28,14 +36,24 @@ function CogIcon({ className }: { className?: string }) {
   )
 }
 
-const navItems = [
+const topNavItems = [
   { label: 'Forecast', href: '/forecast', icon: ChartIcon },
   { label: 'Documents', href: '/documents', icon: DocumentIcon },
+]
+
+const pipelineSubItems = [
+  { label: 'Overview', href: '/pipeline' },
+  { label: 'Summary', href: '/pipeline/summary' },
+  { label: 'Targets', href: '/pipeline/targets' },
+]
+
+const bottomNavItems = [
   { label: 'Settings', href: '/settings', icon: CogIcon },
 ]
 
 export function Sidebar() {
   const pathname = usePathname()
+  const pipelineActive = pathname.startsWith('/pipeline')
 
   return (
     <aside className="flex h-screen w-60 flex-col border-r border-zinc-200 bg-white">
@@ -44,7 +62,62 @@ export function Sidebar() {
         <p className="text-xs text-zinc-500">Cash Flow Forecast</p>
       </div>
       <nav className="flex-1 space-y-0.5 px-3">
-        {navItems.map((item) => {
+        {topNavItems.map((item) => {
+          const Icon = item.icon
+          const active = pathname.startsWith(item.href)
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={cn(
+                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                active
+                  ? 'bg-zinc-100 text-zinc-900'
+                  : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
+              )}
+            >
+              <Icon className={cn('h-5 w-5', active ? 'text-zinc-900' : 'text-zinc-400')} />
+              {item.label}
+            </Link>
+          )
+        })}
+
+        {/* Pipeline section */}
+        <Link
+          href="/pipeline"
+          className={cn(
+            'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+            pipelineActive
+              ? 'bg-zinc-100 text-zinc-900'
+              : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
+          )}
+        >
+          <PipelineIcon className={cn('h-5 w-5', pipelineActive ? 'text-zinc-900' : 'text-zinc-400')} />
+          Pipeline
+        </Link>
+        {pipelineActive && (
+          <div className="ml-8 space-y-0.5">
+            {pipelineSubItems.map((sub) => {
+              const subActive = pathname === sub.href
+              return (
+                <Link
+                  key={sub.href}
+                  href={sub.href}
+                  className={cn(
+                    'block rounded-lg px-3 py-1.5 text-sm transition-colors',
+                    subActive
+                      ? 'font-medium text-zinc-900'
+                      : 'text-zinc-500 hover:text-zinc-900'
+                  )}
+                >
+                  {sub.label}
+                </Link>
+              )
+            })}
+          </div>
+        )}
+
+        {bottomNavItems.map((item) => {
           const Icon = item.icon
           const active = pathname.startsWith(item.href)
           return (
