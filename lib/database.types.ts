@@ -1,465 +1,870 @@
-// Minimal hand-written DB types matching migrations 001-010.
-// Run `npm run gen:types` once connected to Supabase to regenerate.
-
-export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json | undefined }
+  | Json[]
 
 export type Database = {
+  __InternalSupabase: {
+    PostgrestVersion: "14.5"
+  }
   public: {
     Tables: {
-      entity_groups: {
+      bank_accounts: {
         Row: {
+          account_number: string | null
+          account_type: string | null
+          created_at: string | null
+          entity_id: string
           id: string
+          is_active: boolean | null
           name: string
-          od_facility_limit: number
           notes: string | null
-          created_at: string
-          updated_at: string
+          od_limit: number | null
+          updated_at: string | null
         }
         Insert: {
+          account_number?: string | null
+          account_type?: string | null
+          created_at?: string | null
+          entity_id: string
           id?: string
+          is_active?: boolean | null
           name: string
-          od_facility_limit?: number
           notes?: string | null
-          created_at?: string
-          updated_at?: string
+          od_limit?: number | null
+          updated_at?: string | null
         }
         Update: {
+          account_number?: string | null
+          account_type?: string | null
+          created_at?: string | null
+          entity_id?: string
+          id?: string
+          is_active?: boolean | null
           name?: string
-          od_facility_limit?: number
           notes?: string | null
-          updated_at?: string
+          od_limit?: number | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bank_accounts_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      categories: {
+        Row: {
+          code: string
+          created_at: string | null
+          flow_direction: string | null
+          id: string
+          is_system: boolean | null
+          name: string
+          parent_id: string | null
+          section_number: string | null
+          sort_order: number
+        }
+        Insert: {
+          code: string
+          created_at?: string | null
+          flow_direction?: string | null
+          id?: string
+          is_system?: boolean | null
+          name: string
+          parent_id?: string | null
+          section_number?: string | null
+          sort_order?: number
+        }
+        Update: {
+          code?: string
+          created_at?: string | null
+          flow_direction?: string | null
+          id?: string
+          is_system?: boolean | null
+          name?: string
+          parent_id?: string | null
+          section_number?: string | null
+          sort_order?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "categories_parent_id_fkey"
+            columns: ["parent_id"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      category_mappings: {
+        Row: {
+          category_id: string
+          counterparty_pattern: string
+          created_at: string | null
+          entity_id: string | null
+          id: string
+          use_count: number | null
+        }
+        Insert: {
+          category_id: string
+          counterparty_pattern: string
+          created_at?: string | null
+          entity_id?: string | null
+          id?: string
+          use_count?: number | null
+        }
+        Update: {
+          category_id?: string
+          counterparty_pattern?: string
+          created_at?: string | null
+          entity_id?: string | null
+          id?: string
+          use_count?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "category_mappings_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "category_mappings_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      document_extractions: {
+        Row: {
+          amount: number | null
+          auto_confirmed: boolean
+          category_name: string | null
+          confidence: number | null
+          counterparty: string | null
+          created_at: string | null
+          document_id: string
+          entity_name: string | null
+          expected_date: string | null
+          forecast_line_id: string | null
+          id: string
+          invoice_number: string | null
+          is_confirmed: boolean | null
+          is_dismissed: boolean | null
+          payment_terms: string | null
+          raw_text: string | null
+          status_reason: string | null
+          suggested_bank_account_id: string | null
+          suggested_category_id: string | null
+          suggested_entity_id: string | null
+          suggested_period_id: string | null
+          suggested_status: string | null
+        }
+        Insert: {
+          amount?: number | null
+          auto_confirmed?: boolean
+          category_name?: string | null
+          confidence?: number | null
+          counterparty?: string | null
+          created_at?: string | null
+          document_id: string
+          entity_name?: string | null
+          expected_date?: string | null
+          forecast_line_id?: string | null
+          id?: string
+          invoice_number?: string | null
+          is_confirmed?: boolean | null
+          is_dismissed?: boolean | null
+          payment_terms?: string | null
+          raw_text?: string | null
+          status_reason?: string | null
+          suggested_bank_account_id?: string | null
+          suggested_category_id?: string | null
+          suggested_entity_id?: string | null
+          suggested_period_id?: string | null
+          suggested_status?: string | null
+        }
+        Update: {
+          amount?: number | null
+          auto_confirmed?: boolean
+          category_name?: string | null
+          confidence?: number | null
+          counterparty?: string | null
+          created_at?: string | null
+          document_id?: string
+          entity_name?: string | null
+          expected_date?: string | null
+          forecast_line_id?: string | null
+          id?: string
+          invoice_number?: string | null
+          is_confirmed?: boolean | null
+          is_dismissed?: boolean | null
+          payment_terms?: string | null
+          raw_text?: string | null
+          status_reason?: string | null
+          suggested_bank_account_id?: string | null
+          suggested_category_id?: string | null
+          suggested_entity_id?: string | null
+          suggested_period_id?: string | null
+          suggested_status?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "document_extractions_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "document_extractions_forecast_line_id_fkey"
+            columns: ["forecast_line_id"]
+            isOneToOne: false
+            referencedRelation: "forecast_lines"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "document_extractions_suggested_bank_account_id_fkey"
+            columns: ["suggested_bank_account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "document_extractions_suggested_category_id_fkey"
+            columns: ["suggested_category_id"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "document_extractions_suggested_entity_id_fkey"
+            columns: ["suggested_entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "document_extractions_suggested_period_id_fkey"
+            columns: ["suggested_period_id"]
+            isOneToOne: false
+            referencedRelation: "forecast_periods"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      documents: {
+        Row: {
+          created_at: string | null
+          doc_type: Database["public"]["Enums"]["document_type"] | null
+          error_message: string | null
+          file_size: number
+          filename: string
+          id: string
+          mime_type: string
+          status: Database["public"]["Enums"]["document_status"]
+          storage_path: string
+          updated_at: string | null
+          uploaded_by: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          doc_type?: Database["public"]["Enums"]["document_type"] | null
+          error_message?: string | null
+          file_size: number
+          filename: string
+          id?: string
+          mime_type: string
+          status?: Database["public"]["Enums"]["document_status"]
+          storage_path: string
+          updated_at?: string | null
+          uploaded_by?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          doc_type?: Database["public"]["Enums"]["document_type"] | null
+          error_message?: string | null
+          file_size?: number
+          filename?: string
+          id?: string
+          mime_type?: string
+          status?: Database["public"]["Enums"]["document_status"]
+          storage_path?: string
+          updated_at?: string | null
+          uploaded_by?: string | null
         }
         Relationships: []
       }
       entities: {
         Row: {
-          id: string
-          group_id: string
-          name: string
           code: string
-          is_active: boolean
-          created_at: string
-          updated_at: string
+          created_at: string | null
+          group_id: string
+          id: string
+          is_active: boolean | null
+          name: string
+          updated_at: string | null
         }
         Insert: {
-          id?: string
-          group_id: string
-          name: string
           code: string
-          is_active?: boolean
-          created_at?: string
-          updated_at?: string
+          created_at?: string | null
+          group_id: string
+          id?: string
+          is_active?: boolean | null
+          name: string
+          updated_at?: string | null
         }
         Update: {
+          code?: string
+          created_at?: string | null
           group_id?: string
+          id?: string
+          is_active?: boolean | null
           name?: string
-          code?: string
-          is_active?: boolean
-          updated_at?: string
+          updated_at?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "entities_group_id_fkey"
+            columns: ["group_id"]
+            isOneToOne: false
+            referencedRelation: "entity_groups"
+            referencedColumns: ["id"]
+          },
+        ]
       }
-      bank_accounts: {
+      entity_groups: {
         Row: {
+          created_at: string | null
           id: string
-          entity_id: string
           name: string
-          account_type: string
-          od_limit: number
           notes: string | null
-          is_active: boolean
-          created_at: string
-          updated_at: string
+          od_facility_limit: number | null
+          updated_at: string | null
         }
         Insert: {
+          created_at?: string | null
           id?: string
-          entity_id: string
           name: string
-          account_type?: string
-          od_limit?: number
           notes?: string | null
-          is_active?: boolean
-          created_at?: string
-          updated_at?: string
+          od_facility_limit?: number | null
+          updated_at?: string | null
         }
         Update: {
-          entity_id?: string
+          created_at?: string | null
+          id?: string
           name?: string
-          account_type?: string
-          od_limit?: number
           notes?: string | null
-          is_active?: boolean
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      categories: {
-        Row: {
-          id: string
-          parent_id: string | null
-          name: string
-          code: string
-          section_number: string | null
-          sort_order: number
-          is_system: boolean
-          flow_direction: string | null
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          parent_id?: string | null
-          name: string
-          code: string
-          section_number?: string | null
-          sort_order?: number
-          is_system?: boolean
-          flow_direction?: string | null
-          created_at?: string
-        }
-        Update: {
-          parent_id?: string | null
-          name?: string
-          code?: string
-          section_number?: string | null
-          sort_order?: number
-          is_system?: boolean
-          flow_direction?: string | null
-        }
-        Relationships: []
-      }
-      forecast_periods: {
-        Row: {
-          id: string
-          week_ending: string
-          is_actual: boolean
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          week_ending: string
-          is_actual?: boolean
-          created_at?: string
-        }
-        Update: {
-          week_ending?: string
-          is_actual?: boolean
+          od_facility_limit?: number | null
+          updated_at?: string | null
         }
         Relationships: []
       }
       forecast_lines: {
         Row: {
-          id: string
-          entity_id: string
-          category_id: string
-          period_id: string
           amount: number
+          bank_account_id: string | null
+          category_id: string
           confidence: number
-          source: string
+          counterparty: string | null
+          created_at: string | null
+          created_by: string | null
+          entity_id: string
+          id: string
+          line_status: string
+          notes: string | null
+          period_id: string
+          source: Database["public"]["Enums"]["source_type"]
           source_document_id: string | null
           source_rule_id: string | null
-          counterparty: string | null
-          notes: string | null
-          created_by: string | null
-          created_at: string
-          updated_at: string
+          updated_at: string | null
         }
         Insert: {
-          id?: string
-          entity_id: string
+          amount?: number
+          bank_account_id?: string | null
           category_id: string
+          confidence?: number
+          counterparty?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          entity_id: string
+          id?: string
+          line_status?: string
+          notes?: string | null
           period_id: string
-          amount?: number
-          confidence?: number
-          source?: string
+          source?: Database["public"]["Enums"]["source_type"]
           source_document_id?: string | null
           source_rule_id?: string | null
-          counterparty?: string | null
-          notes?: string | null
-          created_by?: string | null
-          created_at?: string
-          updated_at?: string
+          updated_at?: string | null
         }
         Update: {
-          entity_id?: string
+          amount?: number
+          bank_account_id?: string | null
           category_id?: string
+          confidence?: number
+          counterparty?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          entity_id?: string
+          id?: string
+          line_status?: string
+          notes?: string | null
           period_id?: string
-          amount?: number
-          confidence?: number
-          source?: string
+          source?: Database["public"]["Enums"]["source_type"]
           source_document_id?: string | null
           source_rule_id?: string | null
-          counterparty?: string | null
-          notes?: string | null
-          updated_at?: string
+          updated_at?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "fk_forecast_lines_document"
+            columns: ["source_document_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fk_forecast_lines_rule"
+            columns: ["source_rule_id"]
+            isOneToOne: false
+            referencedRelation: "recurring_rules"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "forecast_lines_bank_account_id_fkey"
+            columns: ["bank_account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "forecast_lines_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "forecast_lines_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "forecast_lines_period_id_fkey"
+            columns: ["period_id"]
+            isOneToOne: false
+            referencedRelation: "forecast_periods"
+            referencedColumns: ["id"]
+          },
+        ]
       }
-      recurring_rules: {
+      forecast_periods: {
         Row: {
+          created_at: string | null
           id: string
-          entity_id: string
-          category_id: string
-          description: string
-          amount: number
-          frequency: string
-          anchor_date: string
-          day_of_month: number | null
-          end_date: string | null
-          is_active: boolean
-          counterparty: string | null
-          notes: string | null
-          created_by: string | null
-          created_at: string
-          updated_at: string
+          is_actual: boolean | null
+          week_ending: string
         }
         Insert: {
+          created_at?: string | null
           id?: string
-          entity_id: string
-          category_id: string
-          description: string
-          amount: number
-          frequency: string
-          anchor_date: string
-          day_of_month?: number | null
-          end_date?: string | null
-          is_active?: boolean
-          counterparty?: string | null
-          notes?: string | null
-          created_by?: string | null
-          created_at?: string
-          updated_at?: string
+          is_actual?: boolean | null
+          week_ending: string
         }
         Update: {
-          entity_id?: string
-          category_id?: string
-          description?: string
-          amount?: number
-          frequency?: string
-          anchor_date?: string
-          day_of_month?: number | null
-          end_date?: string | null
-          is_active?: boolean
-          counterparty?: string | null
-          notes?: string | null
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      scenarios: {
-        Row: {
-          id: string
-          name: string
-          description: string | null
-          is_default: boolean
-          created_by: string | null
-          created_at: string
-          updated_at: string
-        }
-        Insert: {
+          created_at?: string | null
           id?: string
-          name: string
-          description?: string | null
-          is_default?: boolean
-          created_by?: string | null
-          created_at?: string
-          updated_at?: string
-        }
-        Update: {
-          name?: string
-          description?: string | null
-          is_default?: boolean
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      scenario_overrides: {
-        Row: {
-          id: string
-          scenario_id: string
-          target_type: string
-          target_id: string
-          override_confidence: number | null
-          override_amount: number | null
-          override_week_shift: number
-          is_excluded: boolean
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          scenario_id: string
-          target_type: string
-          target_id: string
-          override_confidence?: number | null
-          override_amount?: number | null
-          override_week_shift?: number
-          is_excluded?: boolean
-          created_at?: string
-        }
-        Update: {
-          scenario_id?: string
-          target_type?: string
-          target_id?: string
-          override_confidence?: number | null
-          override_amount?: number | null
-          override_week_shift?: number
-          is_excluded?: boolean
-        }
-        Relationships: []
-      }
-      documents: {
-        Row: {
-          id: string
-          filename: string
-          mime_type: string
-          file_size: number
-          storage_path: string
-          status: string
-          doc_type: string | null
-          error_message: string | null
-          uploaded_by: string | null
-          created_at: string
-          updated_at: string
-        }
-        Insert: {
-          id?: string
-          filename: string
-          mime_type: string
-          file_size: number
-          storage_path: string
-          status?: string
-          doc_type?: string | null
-          error_message?: string | null
-          uploaded_by?: string | null
-          created_at?: string
-          updated_at?: string
-        }
-        Update: {
-          filename?: string
-          mime_type?: string
-          file_size?: number
-          storage_path?: string
-          status?: string
-          doc_type?: string | null
-          error_message?: string | null
-          uploaded_by?: string | null
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      document_extractions: {
-        Row: {
-          id: string
-          document_id: string
-          entity_name: string | null
-          category_name: string | null
-          counterparty: string | null
-          amount: number | null
-          expected_date: string | null
-          payment_terms: string | null
-          invoice_number: string | null
-          confidence: number
-          raw_text: string | null
-          is_confirmed: boolean
-          is_dismissed: boolean
-          forecast_line_id: string | null
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          document_id: string
-          entity_name?: string | null
-          category_name?: string | null
-          counterparty?: string | null
-          amount?: number | null
-          expected_date?: string | null
-          payment_terms?: string | null
-          invoice_number?: string | null
-          confidence?: number
-          raw_text?: string | null
-          is_confirmed?: boolean
-          is_dismissed?: boolean
-          forecast_line_id?: string | null
-          created_at?: string
-        }
-        Update: {
-          entity_name?: string | null
-          category_name?: string | null
-          counterparty?: string | null
-          amount?: number | null
-          expected_date?: string | null
-          payment_terms?: string | null
-          invoice_number?: string | null
-          confidence?: number
-          raw_text?: string | null
-          is_confirmed?: boolean
-          is_dismissed?: boolean
-          forecast_line_id?: string | null
+          is_actual?: boolean | null
+          week_ending?: string
         }
         Relationships: []
       }
       intercompany_balances: {
         Row: {
-          id: string
-          from_group_id: string
-          to_group_id: string
-          description: string
           amount: number
           as_at_date: string
-          notes: string | null
+          created_at: string | null
           created_by: string | null
-          created_at: string
-          updated_at: string
+          description: string
+          from_group_id: string
+          id: string
+          notes: string | null
+          to_group_id: string
+          updated_at: string | null
         }
         Insert: {
-          id?: string
-          from_group_id: string
-          to_group_id: string
-          description: string
           amount: number
           as_at_date: string
-          notes?: string | null
+          created_at?: string | null
           created_by?: string | null
-          created_at?: string
-          updated_at?: string
+          description: string
+          from_group_id: string
+          id?: string
+          notes?: string | null
+          to_group_id: string
+          updated_at?: string | null
         }
         Update: {
-          from_group_id?: string
-          to_group_id?: string
-          description?: string
           amount?: number
           as_at_date?: string
+          created_at?: string | null
+          created_by?: string | null
+          description?: string
+          from_group_id?: string
+          id?: string
           notes?: string | null
-          updated_at?: string
+          to_group_id?: string
+          updated_at?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "intercompany_balances_from_group_id_fkey"
+            columns: ["from_group_id"]
+            isOneToOne: false
+            referencedRelation: "entity_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "intercompany_balances_to_group_id_fkey"
+            columns: ["to_group_id"]
+            isOneToOne: false
+            referencedRelation: "entity_groups"
+            referencedColumns: ["id"]
+          },
+        ]
       }
-      category_mappings: {
+      recurring_rules: {
         Row: {
-          id: string
-          counterparty_pattern: string
+          amount: number
+          anchor_date: string
           category_id: string
-          entity_id: string | null
-          use_count: number
-          created_at: string
+          counterparty: string | null
+          created_at: string | null
+          created_by: string | null
+          day_of_month: number | null
+          description: string
+          end_date: string | null
+          entity_id: string
+          frequency: Database["public"]["Enums"]["frequency_type"]
+          id: string
+          is_active: boolean | null
+          notes: string | null
+          updated_at: string | null
         }
         Insert: {
-          id?: string
-          counterparty_pattern: string
+          amount: number
+          anchor_date: string
           category_id: string
-          entity_id?: string | null
-          use_count?: number
-          created_at?: string
+          counterparty?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          day_of_month?: number | null
+          description: string
+          end_date?: string | null
+          entity_id: string
+          frequency: Database["public"]["Enums"]["frequency_type"]
+          id?: string
+          is_active?: boolean | null
+          notes?: string | null
+          updated_at?: string | null
         }
         Update: {
-          counterparty_pattern?: string
+          amount?: number
+          anchor_date?: string
           category_id?: string
-          entity_id?: string | null
-          use_count?: number
+          counterparty?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          day_of_month?: number | null
+          description?: string
+          end_date?: string | null
+          entity_id?: string
+          frequency?: Database["public"]["Enums"]["frequency_type"]
+          id?: string
+          is_active?: boolean | null
+          notes?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recurring_rules_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recurring_rules_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      scenario_overrides: {
+        Row: {
+          created_at: string | null
+          id: string
+          is_excluded: boolean | null
+          override_amount: number | null
+          override_confidence: number | null
+          override_week_shift: number | null
+          scenario_id: string
+          target_id: string
+          target_type: Database["public"]["Enums"]["override_target_type"]
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          is_excluded?: boolean | null
+          override_amount?: number | null
+          override_confidence?: number | null
+          override_week_shift?: number | null
+          scenario_id: string
+          target_id: string
+          target_type: Database["public"]["Enums"]["override_target_type"]
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          is_excluded?: boolean | null
+          override_amount?: number | null
+          override_confidence?: number | null
+          override_week_shift?: number | null
+          scenario_id?: string
+          target_id?: string
+          target_type?: Database["public"]["Enums"]["override_target_type"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scenario_overrides_scenario_id_fkey"
+            columns: ["scenario_id"]
+            isOneToOne: false
+            referencedRelation: "scenarios"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      scenarios: {
+        Row: {
+          created_at: string | null
+          created_by: string | null
+          description: string | null
+          id: string
+          is_default: boolean | null
+          name: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          is_default?: boolean | null
+          name: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          is_default?: boolean | null
+          name?: string
+          updated_at?: string | null
         }
         Relationships: []
       }
     }
-    Views: Record<string, never>
-    Functions: Record<string, never>
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      [_ in never]: never
+    }
+    Enums: {
+      document_status:
+        | "uploaded"
+        | "parsing"
+        | "extracting"
+        | "ready_for_review"
+        | "confirmed"
+        | "failed"
+      document_type:
+        | "aged_receivables"
+        | "aged_payables"
+        | "bank_statement"
+        | "invoice"
+        | "loan_agreement"
+        | "payroll_summary"
+        | "contract"
+        | "board_paper"
+        | "other"
+      frequency_type: "weekly" | "fortnightly" | "monthly"
+      override_target_type: "pipeline_item" | "recurring_rule"
+      source_type: "manual" | "document" | "recurring" | "pipeline"
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
   }
 }
+
+type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
+
+type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
+
+export type Tables<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+        DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+      DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
+      Row: infer R
+    }
+    ? R
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])
+    ? (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
+        Row: infer R
+      }
+      ? R
+      : never
+    : never
+
+export type TablesInsert<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Insert: infer I
+    }
+    ? I
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Insert: infer I
+      }
+      ? I
+      : never
+    : never
+
+export type TablesUpdate<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Update: infer U
+    }
+    ? U
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Update: infer U
+      }
+      ? U
+      : never
+    : never
+
+export type Enums<
+  DefaultSchemaEnumNameOrOptions extends
+    | keyof DefaultSchema["Enums"]
+    | { schema: keyof DatabaseWithoutInternals },
+  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
+    : never = never,
+> = DefaultSchemaEnumNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
+  : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
+    ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
+    : never
+
+export type CompositeTypes<
+  PublicCompositeTypeNameOrOptions extends
+    | keyof DefaultSchema["CompositeTypes"]
+    | { schema: keyof DatabaseWithoutInternals },
+  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
+    : never = never,
+> = PublicCompositeTypeNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
+  : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
+    ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
+    : never
+
+export const Constants = {
+  public: {
+    Enums: {
+      document_status: [
+        "uploaded",
+        "parsing",
+        "extracting",
+        "ready_for_review",
+        "confirmed",
+        "failed",
+      ],
+      document_type: [
+        "aged_receivables",
+        "aged_payables",
+        "bank_statement",
+        "invoice",
+        "loan_agreement",
+        "payroll_summary",
+        "contract",
+        "board_paper",
+        "other",
+      ],
+      frequency_type: ["weekly", "fortnightly", "monthly"],
+      override_target_type: ["pipeline_item", "recurring_rule"],
+      source_type: ["manual", "document", "recurring", "pipeline"],
+    },
+  },
+} as const
