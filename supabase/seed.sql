@@ -73,3 +73,17 @@ insert into intercompany_balances (from_group_id, to_group_id, description, amou
   ('a0000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001', 'AP owed to AUG', 287069, '2025-07-15'),
   ('a0000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001', 'AP owed to CNR', 577353, '2025-07-15')
 on conflict do nothing;
+
+-- Create documents storage bucket
+insert into storage.buckets (id, name, public)
+values ('documents', 'documents', false)
+on conflict do nothing;
+
+-- Storage policy: authenticated users can upload and read
+create policy "authenticated_upload" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'documents');
+
+create policy "authenticated_read" on storage.objects
+  for select to authenticated
+  using (bucket_id = 'documents');
