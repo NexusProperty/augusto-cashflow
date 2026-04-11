@@ -418,6 +418,7 @@ function SectionBlock({
                 depth={2}
                 source={line.source}
                 confidence={line.confidence}
+                lineStatus={line.lineStatus}
                 onCellSave={
                   isPipeline
                     ? undefined

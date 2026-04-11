@@ -16,6 +16,7 @@ interface ForecastRowProps {
   badge?: React.ReactNode
   title?: string
   readOnlyCells?: boolean
+  lineStatus?: LineStatus | null
 }
 
 const depthStyles: Record<number, string> = {
@@ -31,8 +32,17 @@ const sourceColors: Record<SourceType, string> = {
   pipeline: 'text-amber-500',
 }
 
+const statusBadgeConfig: Record<string, { label: string; classes: string }> = {
+  confirmed: { label: 'confirmed', classes: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' },
+  speculative: { label: 'speculative', classes: 'bg-rose-50 text-rose-700 ring-rose-600/20' },
+  tbc: { label: 'tbc', classes: 'bg-sky-50 text-sky-700 ring-sky-600/20' },
+  awaiting_budget_approval: { label: 'awaiting', classes: 'bg-amber-50 text-amber-700 ring-amber-600/20' },
+  awaiting_payment: { label: 'awaiting payment', classes: 'bg-violet-50 text-violet-700 ring-violet-600/20' },
+  paid: { label: 'paid', classes: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' },
+}
+
 export function ForecastRow({
-  label, lines, periods, depth, isSubtotal, isTotal, isComputed, source, confidence, onCellSave, badge, title, readOnlyCells,
+  label, lines, periods, depth, isSubtotal, isTotal, isComputed, source, confidence, onCellSave, badge, title, readOnlyCells, lineStatus,
 }: ForecastRowProps) {
   const rowClass = cn(
     isTotal && 'bg-zinc-900 text-white font-bold border-t-2 border-zinc-300',
@@ -49,6 +59,14 @@ export function ForecastRow({
           <span className={cn('mr-1.5 text-[8px]', sourceColors[source])}>●</span>
         )}
         {label}
+        {depth === 2 && lineStatus && lineStatus !== 'none' && statusBadgeConfig[lineStatus] && (
+          <span className={cn(
+            'inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset ml-2',
+            statusBadgeConfig[lineStatus].classes,
+          )}>
+            {statusBadgeConfig[lineStatus].label}
+          </span>
+        )}
         {badge}
         {confidence !== undefined && confidence < 100 && (
           <span className="ml-1.5 text-xs text-amber-600">{confidence}%</span>
