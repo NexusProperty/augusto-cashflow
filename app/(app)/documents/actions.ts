@@ -65,9 +65,12 @@ export async function uploadDocument(formData: FormData) {
 
   if (error) return { error: 'Failed to save document record' }
 
-  // Trigger edge function processing (fire-and-forget)
-  admin.functions.invoke('process-document', {
-    body: { documentId: data.id },
+  // Trigger document processing via API route (fire-and-forget)
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
+  fetch(`${appUrl}/api/documents/process`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ documentId: data.id }),
   }).catch(() => {
     // Processing can be retried — don't fail the upload
   })
