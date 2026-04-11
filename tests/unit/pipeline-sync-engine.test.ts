@@ -152,6 +152,31 @@ describe('computeSyncLines', () => {
     expect(lines).toHaveLength(0)
   })
 
+  it('falls back to even distribution for custom (not yet implemented)', () => {
+    const allocation: PipelineAllocation = {
+      id: 'a1',
+      projectId: PROJECT_ID,
+      month: '2026-04-01',
+      amount: 80000,
+      distribution: 'custom',
+    }
+
+    const lines = computeSyncLines({
+      allocation,
+      stage: 'confirmed',
+      entityId: ENTITY_ID,
+      projectId: PROJECT_ID,
+      clientName: CLIENT_NAME,
+      bankAccountId: BANK_ACCOUNT_ID,
+      arCategoryId: AR_CATEGORY_ID,
+      weekEndings,
+      periodMap,
+    })
+
+    expect(lines).toHaveLength(4)
+    expect(lines.reduce((s, l) => s + l.amount, 0)).toBe(80000)
+  })
+
   it('handles remainder cents by adding to last week on even distribution', () => {
     const allocation: PipelineAllocation = {
       id: 'a1',

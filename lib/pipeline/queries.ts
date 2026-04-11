@@ -7,7 +7,62 @@ import type {
   RevenueTarget,
 } from './types'
 
-function mapClient(row: any): PipelineClient {
+// Local type aliases matching the DB schema (generated types too verbose to import inline)
+type DbClient = {
+  id: string
+  entity_id: string
+  name: string
+  is_active: boolean
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+type DbProject = {
+  id: string
+  client_id: string
+  entity_id: string
+  job_number: string | null
+  project_name: string
+  task_estimate: string | null
+  stage: string
+  team_member: string | null
+  billing_amount: number | null
+  third_party_costs: number | null
+  gross_profit: number | null
+  invoice_date: string | null
+  notes: string | null
+  is_synced: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+type DbAllocation = {
+  id: string
+  project_id: string
+  month: string
+  amount: number
+  distribution: string
+  created_at: string
+  updated_at: string
+}
+
+type DbTarget = {
+  id: string
+  entity_id: string
+  month: string
+  target_amount: number
+  created_at: string
+  updated_at: string
+}
+
+type DbPeriod = {
+  id: string
+  week_ending: string
+}
+
+function mapClient(row: DbClient): PipelineClient {
   return {
     id: row.id,
     entityId: row.entity_id,
@@ -17,7 +72,7 @@ function mapClient(row: any): PipelineClient {
   }
 }
 
-function mapProject(row: any): PipelineProject {
+function mapProject(row: DbProject): PipelineProject {
   return {
     id: row.id,
     clientId: row.client_id,
@@ -25,7 +80,7 @@ function mapProject(row: any): PipelineProject {
     jobNumber: row.job_number,
     projectName: row.project_name,
     taskEstimate: row.task_estimate,
-    stage: row.stage,
+    stage: row.stage as PipelineProject['stage'],
     teamMember: row.team_member,
     billingAmount: row.billing_amount != null ? Number(row.billing_amount) : null,
     thirdPartyCosts: row.third_party_costs != null ? Number(row.third_party_costs) : null,
@@ -37,17 +92,17 @@ function mapProject(row: any): PipelineProject {
   }
 }
 
-function mapAllocation(row: any): PipelineAllocation {
+function mapAllocation(row: DbAllocation): PipelineAllocation {
   return {
     id: row.id,
     projectId: row.project_id,
     month: row.month,
     amount: Number(row.amount) || 0,
-    distribution: row.distribution,
+    distribution: row.distribution as PipelineAllocation['distribution'],
   }
 }
 
-function mapTarget(row: any): RevenueTarget {
+function mapTarget(row: DbTarget): RevenueTarget {
   return {
     id: row.id,
     entityId: row.entity_id,
@@ -97,13 +152,13 @@ export async function loadPipelineData(
       .lte('month', months[months.length - 1]),
   ])
 
-  const clients = (rawClients ?? []).map(mapClient)
-  const allocs = (rawAllocations ?? []).map(mapAllocation)
-  const targets = (rawTargets ?? []).map(mapTarget)
+  const clients = (rawClients as DbClient[] ?? []).map(mapClient)
+  const allocs = (rawAllocations as DbAllocation[] ?? []).map(mapAllocation)
+  const targets = (rawTargets as DbTarget[] ?? []).map(mapTarget)
 
   const clientMap = new Map(clients.map((c) => [c.id, c.name]))
 
-  const projects: PipelineProjectRow[] = (rawProjects ?? []).map((row) => {
+  const projects: PipelineProjectRow[] = (rawProjects as DbProject[] ?? []).map((row) => {
     const proj = mapProject(row)
     const projAllocs = allocs.filter((a) => a.projectId === proj.id)
     return {
@@ -134,5 +189,5 @@ export async function loadForecastPeriods(supabase: SupabaseClient) {
     .from('forecast_periods')
     .select('id, week_ending')
     .order('week_ending')
-  return (data ?? []).map((r: any) => ({ id: r.id, weekEnding: r.week_ending }))
+  return (data ?? []).map((r) => ({ id: (r as DbPeriod).id, weekEnding: (r as DbPeriod).week_ending }))
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState, useTransition } from 'react'
+import { Fragment, useState, useEffect, useRef, useTransition } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { getMonthLabel } from '@/lib/pipeline/fiscal-year'
@@ -49,6 +49,8 @@ function AmountCell({
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  const draftRef = useRef(draft)
+  useEffect(() => { draftRef.current = draft }, [draft])
 
   if (editing) {
     return (
@@ -58,7 +60,7 @@ function AmountCell({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => {
-            const num = parseFloat(draft)
+            const num = parseFloat(draftRef.current)
             if (!isNaN(num)) onSave(projectId, month, num)
             setEditing(false)
           }}

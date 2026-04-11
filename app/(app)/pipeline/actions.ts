@@ -90,10 +90,12 @@ async function syncProject(projectId: string) {
 
   if (!arCategory || !bankAccount) return
 
-  const allWeekEndings = (periods ?? []).map((p: any) => p.week_ending as string)
+  type PeriodRow = { id: string; week_ending: string }
+  const allWeekEndings = (periods ?? []).map((p) => (p as PeriodRow).week_ending)
   const periodMap: Record<string, string> = {}
   for (const p of periods ?? []) {
-    periodMap[(p as any).week_ending] = (p as any).id
+    const row = p as PeriodRow
+    periodMap[row.week_ending] = row.id
   }
 
   // Delete existing synced lines for this project
@@ -103,8 +105,20 @@ async function syncProject(projectId: string) {
     .eq('source_pipeline_project_id', projectId)
 
   // Build new lines
-  const clientName = (project.pipeline_clients as any)?.name ?? 'Unknown'
-  const newLines: any[] = []
+  type ClientJoin = { name: string }
+  const clientName = (project.pipeline_clients as ClientJoin | null)?.name ?? 'Unknown'
+  const newLines: {
+    entity_id: string
+    category_id: string
+    period_id: string
+    bank_account_id: string
+    amount: number
+    confidence: number
+    source: 'pipeline'
+    source_pipeline_project_id: string
+    counterparty: string
+    line_status: string
+  }[] = []
 
   for (const rawAlloc of allocations ?? []) {
     const allocation = {
@@ -112,7 +126,7 @@ async function syncProject(projectId: string) {
       projectId: rawAlloc.project_id,
       month: rawAlloc.month,
       amount: Number(rawAlloc.amount) || 0,
-      distribution: rawAlloc.distribution as any,
+      distribution: rawAlloc.distribution as 'even' | 'first_week' | 'last_week' | 'custom',
     }
     const weekEndings = getWeeksInMonth(allWeekEndings, allocation.month)
 
@@ -178,14 +192,31 @@ export async function createProject(
 
   const admin = createAdminClient()
 
-  // Upsert client by (entity_id, name)
-  const { data: client, error: clientError } = await admin
+  // Find or create client (case-insensitive match on name)
+  let client: { id: string } | null = null
+  const { data: existingClient } = await admin
     .from('pipeline_clients')
-    .upsert({ entity_id: entityId, name: clientName }, { onConflict: 'entity_id,name' })
-    .select('id')
+    .select('id, name')
+    .eq('entity_id', entityId)
+    .ilike('name', clientName)
+    .limit(1)
     .single()
 
-  if (clientError || !client) {
+  if (existingClient) {
+    client = existingClient
+  } else {
+    const { data: newClient, error: clientError } = await admin
+      .from('pipeline_clients')
+      .insert({ entity_id: entityId, name: clientName })
+      .select('id')
+      .single()
+    if (clientError || !newClient) {
+      return { error: 'Failed to create client' }
+    }
+    client = newClient
+  }
+
+  if (!client) {
     return { error: 'Failed to upsert client' }
   }
 
@@ -363,12 +394,26 @@ export async function commitImport(
     const entityId = parsed.data.entityMap[proj.entityCode]
     if (!entityId) continue
 
-    // Upsert client
-    const { data: client } = await admin
+    // Find or create client (case-insensitive match on name)
+    let client: { id: string } | null = null
+    const { data: existingImportClient } = await admin
       .from('pipeline_clients')
-      .upsert({ entity_id: entityId, name: proj.clientName }, { onConflict: 'entity_id,name' })
-      .select()
+      .select('id, name')
+      .eq('entity_id', entityId)
+      .ilike('name', proj.clientName)
+      .limit(1)
       .single()
+
+    if (existingImportClient) {
+      client = existingImportClient
+    } else {
+      const { data: newImportClient } = await admin
+        .from('pipeline_clients')
+        .insert({ entity_id: entityId, name: proj.clientName })
+        .select('id')
+        .single()
+      client = newImportClient
+    }
 
     if (!client) continue
 
@@ -385,6 +430,9 @@ export async function commitImport(
         team_member: proj.teamMember,
         billing_amount: proj.billingAmount,
         third_party_costs: proj.thirdPartyCosts,
+        gross_profit: proj.billingAmount != null && proj.thirdPartyCosts != null
+          ? proj.billingAmount - proj.thirdPartyCosts
+          : null,
         notes: proj.notes,
         created_by: user.id,
       })
