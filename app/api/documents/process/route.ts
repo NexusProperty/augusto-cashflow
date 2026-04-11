@@ -198,14 +198,15 @@ export async function POST(req: Request) {
         }
       })
 
+      // Cast: database.types.ts is stale, missing suggested_* columns
       const { data: insertedRows } = await supabase
         .from('document_extractions')
-        .insert(rows)
+        .insert(rows as any)
         .select()
 
       // Auto-confirm high-confidence, fully-resolved items
       if (insertedRows) {
-        for (const ext of insertedRows) {
+        for (const ext of insertedRows as any[]) {
           const resolved = {
             entityId: ext.suggested_entity_id,
             bankAccountId: ext.suggested_bank_account_id,
@@ -229,7 +230,7 @@ export async function POST(req: Request) {
                 source_document_id: documentId,
                 counterparty: ext.counterparty,
                 notes: ext.invoice_number ? `Invoice: ${ext.invoice_number}` : null,
-              })
+              } as any)
               .select()
               .single()
 
@@ -240,7 +241,7 @@ export async function POST(req: Request) {
                   is_confirmed: true,
                   auto_confirmed: true,
                   forecast_line_id: line.id,
-                })
+                } as any)
                 .eq('id', ext.id)
 
               autoConfirmedCount++

@@ -82,7 +82,7 @@ export default async function DocumentsPage() {
                 entities={entities ?? []}
                 categories={categories ?? []}
                 periods={periods ?? []}
-                bankAccounts={bankAccounts ?? []}
+                bankAccounts={(bankAccounts ?? []) as any}
               />
             ))}
           </div>
@@ -104,7 +104,7 @@ export default async function DocumentsPage() {
                 entities={entities ?? []}
                 categories={categories ?? []}
                 periods={periods ?? []}
-                bankAccounts={bankAccounts ?? []}
+                bankAccounts={(bankAccounts ?? []) as any}
               />
             ))}
           </div>

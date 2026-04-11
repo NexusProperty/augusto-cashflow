@@ -36,10 +36,11 @@ export async function fetchReferenceData(): Promise<ReferenceData> {
       .limit(18),
   ])
 
+  // Cast: database.types.ts is stale — missing account_number, flow_direction may be nullable
   return {
     entities: entities ?? [],
-    bankAccounts: (bankAccounts as ReferenceData['bankAccounts']) ?? [],
-    categories: categories ?? [],
+    bankAccounts: (bankAccounts as unknown as ReferenceData['bankAccounts']) ?? [],
+    categories: (categories as unknown as ReferenceData['categories']) ?? [],
     periods: periods ?? [],
   }
 }

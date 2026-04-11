@@ -130,6 +130,7 @@ export async function confirmExtraction(extractionId: string, overrides?: {
   const bankAccountId = overrides?.bankAccountId
   if (!bankAccountId) return { error: 'Bank account not specified — please select a bank account' }
 
+  // Cast: database.types.ts missing bank_account_id, line_status columns
   const { data: line, error: lineErr } = await admin
     .from('forecast_lines')
     .insert({
@@ -145,7 +146,7 @@ export async function confirmExtraction(extractionId: string, overrides?: {
       counterparty: extraction.counterparty,
       notes: extraction.invoice_number ? `Invoice: ${extraction.invoice_number}` : null,
       created_by: user.id,
-    })
+    } as any)
     .select()
     .single()
 
@@ -179,13 +180,22 @@ export async function bulkConfirmExtractions(extractionIds: string[]) {
 
   const admin = createAdminClient()
 
-  // Fetch all extractions
-  const { data: extractions, error: fetchErr } = await admin
+  // Fetch all extractions (cast: database.types.ts is stale, missing suggested_* columns)
+  const { data: rawExtractions, error: fetchErr } = await admin
     .from('document_extractions')
     .select('*')
     .in('id', extractionIds)
 
-  if (fetchErr || !extractions) return { error: 'Failed to fetch extractions' }
+  if (fetchErr || !rawExtractions) return { error: 'Failed to fetch extractions' }
+
+  const extractions = rawExtractions as (typeof rawExtractions[number] & {
+    suggested_entity_id: string | null
+    suggested_bank_account_id: string | null
+    suggested_category_id: string | null
+    suggested_period_id: string | null
+    suggested_status: string | null
+    auto_confirmed: boolean
+  })[]
 
   // Validate all have complete suggestions
   const incomplete = extractions.filter(ext =>
@@ -200,7 +210,7 @@ export async function bulkConfirmExtractions(extractionIds: string[]) {
     return { error: `${incomplete.length} extraction(s) have incomplete field resolution` }
   }
 
-  // Create forecast lines in batch
+  // Create forecast lines in batch (cast: database.types.ts missing bank_account_id, line_status)
   const lineRows = extractions.map(ext => ({
     entity_id: ext.suggested_entity_id!,
     category_id: ext.suggested_category_id!,
@@ -218,7 +228,7 @@ export async function bulkConfirmExtractions(extractionIds: string[]) {
 
   const { data: lines, error: lineErr } = await admin
     .from('forecast_lines')
-    .insert(lineRows)
+    .insert(lineRows as any)
     .select()
 
   if (lineErr || !lines) return { error: 'Failed to create forecast lines' }
@@ -240,13 +250,15 @@ export async function undoAutoConfirm(extractionId: string) {
   await requireAuth()
   const admin = createAdminClient()
 
-  const { data: extraction, error: fetchErr } = await admin
+  // Cast: database.types.ts is stale, missing auto_confirmed column
+  const { data: rawExtraction, error: fetchErr } = await admin
     .from('document_extractions')
     .select('*')
     .eq('id', extractionId)
     .single()
 
-  if (fetchErr || !extraction) return { error: 'Extraction not found' }
+  if (fetchErr || !rawExtraction) return { error: 'Extraction not found' }
+  const extraction = rawExtraction as typeof rawExtraction & { auto_confirmed: boolean }
   if (!extraction.auto_confirmed) return { error: 'Extraction was not auto-confirmed' }
 
   // Delete the auto-created forecast line
@@ -257,14 +269,14 @@ export async function undoAutoConfirm(extractionId: string) {
       .eq('id', extraction.forecast_line_id)
   }
 
-  // Reset extraction state
+  // Reset extraction state (cast: database.types.ts missing auto_confirmed column)
   await admin
     .from('document_extractions')
     .update({
       is_confirmed: false,
       auto_confirmed: false,
       forecast_line_id: null,
-    })
+    } as any)
     .eq('id', extractionId)
 
   revalidatePath('/documents')
