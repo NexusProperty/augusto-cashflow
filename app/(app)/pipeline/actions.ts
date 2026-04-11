@@ -318,6 +318,107 @@ export async function updateTargets(
   return { ok: true }
 }
 
+// ---------------------------------------------------------------------------
+// Excel import actions
+// ---------------------------------------------------------------------------
+
+export async function importFromExcel(formData: FormData) {
+  await requireAuth()
+  const file = formData.get('file') as File
+  if (!file || file.size === 0) return { error: 'No file provided' }
+
+  const { parseRevenueTracker } = await import('@/lib/pipeline/excel-import')
+  const buffer = await file.arrayBuffer()
+  const result = await parseRevenueTracker(buffer)
+
+  return {
+    data: {
+      projects: result.projects,
+      targets: result.targets,
+      errors: result.errors,
+    },
+  }
+}
+
+export async function commitImport(
+  projects: any[],
+  targets: any[],
+  entityMap: Record<string, string>,
+) {
+  const user = await requireAuth()
+  const admin = createAdminClient()
+
+  let created = 0
+
+  for (const proj of projects) {
+    const entityId = entityMap[proj.entityCode]
+    if (!entityId) continue
+
+    // Upsert client
+    const { data: client } = await admin
+      .from('pipeline_clients')
+      .upsert({ entity_id: entityId, name: proj.clientName }, { onConflict: 'entity_id,name' })
+      .select()
+      .single()
+
+    if (!client) continue
+
+    // Insert project
+    const { data: project } = await admin
+      .from('pipeline_projects')
+      .insert({
+        client_id: client.id,
+        entity_id: entityId,
+        job_number: proj.jobNumber,
+        project_name: proj.projectName,
+        task_estimate: proj.taskEstimate,
+        stage: proj.stage,
+        team_member: proj.teamMember,
+        billing_amount: proj.billingAmount,
+        third_party_costs: proj.thirdPartyCosts,
+        notes: proj.notes,
+        created_by: user.id,
+      })
+      .select()
+      .single()
+
+    if (!project) continue
+
+    // Insert allocations
+    const allocRows = proj.allocations.map((a: any) => ({
+      project_id: project.id,
+      month: a.month,
+      amount: a.amount,
+    }))
+
+    if (allocRows.length > 0) {
+      await admin.from('pipeline_allocations').insert(allocRows)
+    }
+
+    created++
+  }
+
+  // Import targets
+  for (const t of targets) {
+    const entityId = entityMap[t.entityCode]
+    if (!entityId) continue
+
+    await admin
+      .from('revenue_targets')
+      .upsert(
+        { entity_id: entityId, month: t.month, target_amount: t.amount },
+        { onConflict: 'entity_id,month' },
+      )
+  }
+
+  revalidatePath('/pipeline')
+  revalidatePath('/pipeline/summary')
+  revalidatePath('/pipeline/targets')
+  revalidatePath('/forecast')
+
+  return { ok: true, created }
+}
+
 export async function deleteProject(projectId: string) {
   await requireAuth()
 
