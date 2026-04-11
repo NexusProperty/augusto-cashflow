@@ -9,47 +9,103 @@ interface SummaryCardsProps {
   odFacilityLimit: number
 }
 
-export function SummaryCards({ currentWeek, weeksUntilBreach, pipelineTotal, pipelineWeighted, odFacilityLimit }: SummaryCardsProps) {
-  return (
-    <div className="mb-6 grid grid-cols-4 gap-4">
-      <Card
-        label="Current Cash Position"
-        value={currentWeek ? formatCurrency(currentWeek.closingBalance) : '—'}
-        change={currentWeek ? `As at ${currentWeek.weekEnding}` : ''}
-        negative={currentWeek ? currentWeek.closingBalance < 0 : false}
-      />
-      <Card
-        label="OD Headroom"
-        value={currentWeek ? formatCurrency(currentWeek.availableCash) : '—'}
-        change={currentWeek ? `${formatCurrency(odFacilityLimit)} facility` : ''}
-        negative={currentWeek ? currentWeek.availableCash <= 0 : false}
-      />
-      <Card
-        label="Weeks Until OD Breach"
-        value={weeksUntilBreach !== null ? `${weeksUntilBreach}` : 'None'}
-        change={weeksUntilBreach !== null ? 'Action required' : 'Position healthy'}
-        negative={weeksUntilBreach !== null && weeksUntilBreach <= 4}
-      />
-      <Card
-        label="Pipeline (Unconfirmed)"
-        value={formatCurrency(pipelineTotal)}
-        change={`Weighted: ${formatCurrency(pipelineWeighted)}`}
-      />
-    </div>
-  )
-}
+export function SummaryCards({
+  currentWeek,
+  weeksUntilBreach,
+  pipelineTotal,
+  pipelineWeighted,
+  odFacilityLimit,
+}: SummaryCardsProps) {
+  const closingBalance = currentWeek?.closingBalance ?? 0
+  const availableCash = currentWeek?.availableCash ?? 0
 
-function Card({ label, value, change, negative }: {
-  label: string; value: string; change: string; negative?: boolean
-}) {
+  const odUtilPct =
+    odFacilityLimit > 0
+      ? Math.min(((odFacilityLimit - availableCash) / odFacilityLimit) * 100, 100)
+      : 0
+
+  const pipelinePct = Math.min((pipelineTotal / 675_000) * 100, 100)
+
   return (
-    <div className="rounded-lg border border-zinc-200 bg-white p-5">
-      <div className="text-sm font-medium text-zinc-500">{label}</div>
-      <div className={cn('mt-1 text-2xl font-semibold tracking-tight', negative ? 'text-red-600' : 'text-zinc-900')}>
-        {value}
+    <div className="grid grid-cols-4 divide-x divide-zinc-100">
+      {/* 1 — Cash Position */}
+      <div className="px-5 py-5">
+        <div className="text-xs font-medium text-zinc-500">Cash Position</div>
+        <div
+          className={cn(
+            'mt-1 text-2xl font-bold tabular-nums',
+            closingBalance < 0 ? 'text-red-600' : 'text-zinc-900',
+          )}
+        >
+          {currentWeek ? formatCurrency(closingBalance) : '—'}
+        </div>
+        {currentWeek && (
+          <div className="mt-1 text-xs text-zinc-400">week ending {currentWeek.weekEnding}</div>
+        )}
       </div>
-      <div className={cn('mt-1 text-sm', negative ? 'text-red-600' : 'text-zinc-500')}>
-        {change}
+
+      {/* 2 — Available Cash */}
+      <div className="px-5 py-5">
+        <div className="text-xs font-medium text-zinc-500">Available Cash</div>
+        <div
+          className={cn(
+            'mt-1 text-2xl font-bold tabular-nums',
+            availableCash <= 0 ? 'text-red-600' : 'text-emerald-600',
+          )}
+        >
+          {currentWeek ? formatCurrency(availableCash) : '—'}
+        </div>
+        {odFacilityLimit > 0 && (
+          <div className="mt-2">
+            <div className="h-1.5 w-full rounded-full bg-zinc-100">
+              <div
+                className={cn(
+                  'h-1.5 rounded-full',
+                  odUtilPct > 80 ? 'bg-red-500' : odUtilPct > 50 ? 'bg-amber-400' : 'bg-emerald-500',
+                )}
+                style={{ width: `${odUtilPct}%` }}
+              />
+            </div>
+            <div className="mt-1 text-xs text-zinc-400">
+              {formatCurrency(odFacilityLimit)} facility
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 3 — Weeks to Breach */}
+      <div className="px-5 py-5">
+        <div className="text-xs font-medium text-zinc-500">Weeks to Breach</div>
+        <div
+          className={cn(
+            'mt-1 text-2xl font-bold tabular-nums',
+            weeksUntilBreach === null ? 'text-emerald-600' : weeksUntilBreach <= 4 ? 'text-red-600' : 'text-amber-500',
+          )}
+        >
+          {weeksUntilBreach !== null ? weeksUntilBreach : 'None'}
+        </div>
+        <div className="mt-1 text-xs text-zinc-400">
+          {weeksUntilBreach !== null ? 'weeks until OD breach' : '18-week horizon clear'}
+        </div>
+      </div>
+
+      {/* 4 — Pipeline */}
+      <div className="px-5 py-5">
+        <div className="text-xs font-medium text-zinc-500">Pipeline</div>
+        <div className="mt-1 text-2xl font-bold tabular-nums text-zinc-900">
+          {formatCurrency(pipelineTotal)}
+        </div>
+        <div className="mt-2">
+          <div className="h-1.5 w-full rounded-full bg-zinc-100">
+            <div
+              className="h-1.5 rounded-full bg-sky-500"
+              style={{ width: `${Math.max(pipelinePct, pipelineTotal > 0 ? 2 : 0)}%` }}
+            />
+          </div>
+          <div className="mt-1 text-xs text-zinc-400">
+            {Math.round(pipelinePct)}% of target · weighted {formatCurrency(pipelineWeighted)}
+          </div>
+        </div>
       </div>
     </div>
   )

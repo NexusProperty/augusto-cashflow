@@ -1,19 +1,9 @@
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
-import { Tabs } from '@/components/ui/tabs'
-import { SummaryCards } from '@/components/forecast/summary-cards'
-import { ScenarioToolbar } from '@/components/forecast/scenario-toolbar'
-import { ForecastGrid } from '@/components/forecast/forecast-grid'
+import { Dashboard } from '@/components/forecast/dashboard'
 import { loadForecastData } from '@/lib/forecast/queries'
 import { computeWeekSummaries } from '@/lib/forecast/engine'
 import { generateRecurringLines } from '@/lib/forecast/recurring'
 import { AUGUSTO_GROUP_ID } from '@/lib/types'
-
-const forecastTabs = [
-  { label: 'Augusto Group', href: '/forecast' },
-  { label: 'Coachmate', href: '/forecast/coachmate' },
-  { label: 'Intercompany', href: '/forecast/intercompany' },
-]
 
 export default async function ForecastPage({
   searchParams,
@@ -49,41 +39,30 @@ export default async function ForecastPage({
   const breachWeek = summaries.findIndex((s) => s.isOverdrawn)
   const weeksUntilBreach = breachWeek >= 0 ? breachWeek : null
 
-  const { data: scenarios } = await supabase.from('scenarios').select('*').order('created_at')
+  const currentWeek = summaries[0] ?? null
 
-  const weekRange = data.periods.length > 0
-    ? `${data.periods.length} weeks · ${data.periods[0].weekEnding} → ${data.periods[data.periods.length - 1].weekEnding}`
-    : ''
+  const pipelineByStage = { confirmed: 0, awaiting: 0, upcoming: 0, speculative: 0 }
+  for (const line of allLines) {
+    if (line.source !== 'pipeline') continue
+    if (line.lineStatus === 'confirmed') pipelineByStage.confirmed += line.amount
+    else if (line.lineStatus === 'awaiting_budget_approval') pipelineByStage.awaiting += line.amount
+    else if (line.lineStatus === 'tbc') pipelineByStage.upcoming += line.amount
+    else if (line.lineStatus === 'speculative') pipelineByStage.speculative += line.amount
+  }
 
   return (
-    <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Cash Flow Forecast</h1>
-        <div className="flex gap-2">
-          <Link href="/documents" className="rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50">
-            Upload Documents
-          </Link>
-          <Link href="/settings/recurring" className="rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50">
-            Recurring Rules
-          </Link>
-        </div>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold text-zinc-900">Cash Flow Overview</h1>
       </div>
-
-      <SummaryCards
-        currentWeek={summaries[0] ?? null}
+      <Dashboard
+        summaries={summaries}
+        currentWeek={currentWeek}
         weeksUntilBreach={weeksUntilBreach}
         pipelineTotal={pipelineTotal}
         pipelineWeighted={Math.round(pipelineWeighted)}
         odFacilityLimit={data.entityGroup?.odFacilityLimit ?? 0}
-      />
-
-      <Tabs tabs={forecastTabs} />
-      <ScenarioToolbar scenarios={scenarios ?? []} weekRange={weekRange} />
-      <ForecastGrid
-        periods={data.periods}
-        categories={data.categories}
-        lines={allLines}
-        summaries={summaries}
+        pipelineByStage={pipelineByStage}
       />
     </div>
   )
