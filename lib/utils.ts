@@ -25,6 +25,20 @@ export function formatCurrencyWithSign(amount: number): string {
   return '$0'
 }
 
+export function formatCurrencyCompact(amount: number): string {
+  if (amount === 0) return ''
+  const abs = Math.abs(amount)
+  const sign = amount < 0 ? '-' : ''
+  if (abs >= 1_000_000) {
+    return `${sign}$${(abs / 1_000_000).toFixed(1)}M`
+  }
+  if (abs >= 1_000) {
+    const k = Math.round(abs / 1_000)
+    return `${sign}$${k.toLocaleString('en-NZ')}K`
+  }
+  return `${sign}$${abs}`
+}
+
 export function weekEndingLabel(date: Date): string {
   return `w/e ${date.toLocaleDateString('en-NZ', { day: '2-digit', month: 'short' })}`
 }

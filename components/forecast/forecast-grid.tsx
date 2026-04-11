@@ -152,7 +152,7 @@ function SectionBlock({ section, sectionChildren, categories, linesByCategoryAnd
   return (
     <>
       <ForecastRow
-        label={`${section.sectionNumber}. ${section.name}`}
+        label={section.sectionNumber ? `${section.sectionNumber}. ${section.name}` : section.name}
         lines={new Map()}
         periods={periods}
         depth={0}
@@ -163,7 +163,7 @@ function SectionBlock({ section, sectionChildren, categories, linesByCategoryAnd
         return (
           <ForecastRow
             key={sub.id}
-            label={`${sub.sectionNumber}. ${sub.name}`}
+            label={sub.sectionNumber ? `${sub.sectionNumber}. ${sub.name}` : sub.name}
             lines={new Map()}
             periods={periods}
             depth={1}
