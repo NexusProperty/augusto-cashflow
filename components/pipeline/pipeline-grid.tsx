@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { Fragment, useState, useTransition } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { getMonthLabel } from '@/lib/pipeline/fiscal-year'
@@ -229,9 +229,9 @@ export function PipelineGrid({
             )}
 
             {clientGroups.map(([clientName, clientProjects]) => (
-              <>
+              <Fragment key={`group-${clientName}`}>
                 {/* Client header row */}
-                <tr key={`client-${clientName}`} className="bg-zinc-50">
+                <tr className="bg-zinc-50">
                   <td
                     className="sticky left-0 z-10 bg-zinc-50 px-3 py-2 text-xs font-semibold text-zinc-700"
                     colSpan={2}
@@ -322,7 +322,7 @@ export function PipelineGrid({
                     </tr>
                   )
                 })}
-              </>
+              </Fragment>
             ))}
           </tbody>
         </table>

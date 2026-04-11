@@ -87,6 +87,7 @@ export function ProjectDrawer({
         thirdPartyCosts,
         invoiceDate: form.invoiceDate || undefined,
         notes: form.notes || undefined,
+        isSynced: form.isSynced,
       })
 
       if (result.error) {

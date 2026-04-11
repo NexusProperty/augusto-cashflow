@@ -1,5 +1,6 @@
 'use client'
 
+import { Fragment } from 'react'
 import { getMonthLabel } from '@/lib/pipeline/fiscal-year'
 import type { BUSummaryRow } from '@/lib/pipeline/types'
 
@@ -74,9 +75,9 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
 
         <tbody className="divide-y divide-zinc-100">
           {rows.map((row) => (
-            <>
+            <Fragment key={`entity-${row.entityId}`}>
               {/* Entity header row */}
-              <tr key={`entity-${row.entityId}`} className="bg-zinc-50">
+              <tr className="bg-zinc-50">
                 <td
                   className="sticky left-0 z-10 bg-zinc-50 px-3 py-2 text-xs font-bold text-zinc-800"
                   colSpan={colCount}
@@ -119,7 +120,7 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
                 values={row.pnlForecast}
                 italic
               />
-            </>
+            </Fragment>
           ))}
 
           {/* GROUP total section */}

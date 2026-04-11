@@ -23,6 +23,7 @@ const CreateProjectSchema = z.object({
   thirdPartyCosts: z.number().optional(),
   invoiceDate: z.string().optional(),
   notes: z.string().optional(),
+  isSynced: z.boolean().default(true),
 })
 
 const UpdateAllocationsSchema = z.object({
@@ -172,6 +173,7 @@ export async function createProject(
     thirdPartyCosts,
     invoiceDate,
     notes,
+    isSynced,
   } = parsed.data
 
   const admin = createAdminClient()
@@ -199,7 +201,7 @@ export async function createProject(
       client_id: client.id,
       entity_id: entityId,
       job_number: jobNumber ?? null,
-      name: projectName,
+      project_name: projectName,
       task_estimate: taskEstimate ?? null,
       stage,
       team_member: teamMember ?? null,
@@ -208,7 +210,7 @@ export async function createProject(
       gross_profit: grossProfit ?? null,
       invoice_date: invoiceDate ?? null,
       notes: notes ?? null,
-      is_synced: false,
+      is_synced: isSynced ?? true,
     })
     .select()
     .single()
@@ -227,6 +229,9 @@ export async function updateProjectStage(
 ) {
   await requireAuth()
 
+  const id = z.string().uuid().safeParse(projectId)
+  if (!id.success) return { error: 'Invalid project ID' }
+
   const StageSchema = z.enum(['confirmed', 'awaiting_approval', 'upcoming', 'speculative', 'declined'])
   const parsedStage = StageSchema.safeParse(stage)
   if (!parsedStage.success) return { error: 'Invalid stage value' }
@@ -236,11 +241,11 @@ export async function updateProjectStage(
   const { error } = await admin
     .from('pipeline_projects')
     .update({ stage: parsedStage.data })
-    .eq('id', projectId)
+    .eq('id', id.data)
 
   if (error) return { error: 'Failed to update project stage' }
 
-  await syncProject(projectId)
+  await syncProject(id.data)
 
   revalidatePath('/pipeline')
   revalidatePath('/forecast')
@@ -300,18 +305,13 @@ export async function updateTargets(
   const { targets } = parsed.data
   const admin = createAdminClient()
 
-  for (const target of targets) {
-    await admin
-      .from('pipeline_targets')
-      .upsert(
-        {
-          entity_id: target.entityId,
-          month: target.month,
-          target_amount: target.targetAmount,
-        },
-        { onConflict: 'entity_id,month' },
-      )
-  }
+  const rows = targets.map((t) => ({
+    entity_id: t.entityId,
+    month: t.month,
+    target_amount: t.targetAmount,
+    updated_at: new Date().toISOString(),
+  }))
+  await admin.from('revenue_targets').upsert(rows, { onConflict: 'entity_id,month' })
 
   revalidatePath('/pipeline')
   revalidatePath('/pipeline/targets')
@@ -346,12 +346,21 @@ export async function commitImport(
   entityMap: Record<string, string>,
 ) {
   const user = await requireAuth()
+
+  const ImportSchema = z.object({
+    projects: z.array(z.any()),
+    targets: z.array(z.any()),
+    entityMap: z.record(z.string(), z.string()),
+  })
+  const parsed = ImportSchema.safeParse({ projects, targets, entityMap })
+  if (!parsed.success) return { error: 'Invalid import parameters' }
+
   const admin = createAdminClient()
 
   let created = 0
 
-  for (const proj of projects) {
-    const entityId = entityMap[proj.entityCode]
+  for (const proj of parsed.data.projects) {
+    const entityId = parsed.data.entityMap[proj.entityCode]
     if (!entityId) continue
 
     // Upsert client
@@ -395,12 +404,14 @@ export async function commitImport(
       await admin.from('pipeline_allocations').insert(allocRows)
     }
 
+    await syncProject(project.id)
+
     created++
   }
 
   // Import targets
-  for (const t of targets) {
-    const entityId = entityMap[t.entityCode]
+  for (const t of parsed.data.targets) {
+    const entityId = parsed.data.entityMap[t.entityCode]
     if (!entityId) continue
 
     await admin
@@ -422,19 +433,22 @@ export async function commitImport(
 export async function deleteProject(projectId: string) {
   await requireAuth()
 
+  const id = z.string().uuid().safeParse(projectId)
+  if (!id.success) return { error: 'Invalid project ID' }
+
   const admin = createAdminClient()
 
   // Remove synced forecast lines first
   await admin
     .from('forecast_lines')
     .delete()
-    .eq('source_pipeline_project_id', projectId)
+    .eq('source_pipeline_project_id', id.data)
 
   // Delete project (cascades allocations via FK)
   const { error } = await admin
     .from('pipeline_projects')
     .delete()
-    .eq('id', projectId)
+    .eq('id', id.data)
 
   if (error) return { error: 'Failed to delete project' }
 
@@ -446,23 +460,26 @@ export async function deleteProject(projectId: string) {
 export async function toggleProjectSync(projectId: string, isSynced: boolean) {
   await requireAuth()
 
+  const id = z.string().uuid().safeParse(projectId)
+  if (!id.success) return { error: 'Invalid project ID' }
+
   const admin = createAdminClient()
 
   const { error } = await admin
     .from('pipeline_projects')
     .update({ is_synced: isSynced })
-    .eq('id', projectId)
+    .eq('id', id.data)
 
   if (error) return { error: 'Failed to toggle project sync' }
 
   if (isSynced) {
-    await syncProject(projectId)
+    await syncProject(id.data)
   } else {
     // Remove all synced forecast lines for this project
     await admin
       .from('forecast_lines')
       .delete()
-      .eq('source_pipeline_project_id', projectId)
+      .eq('source_pipeline_project_id', id.data)
   }
 
   revalidatePath('/pipeline')
