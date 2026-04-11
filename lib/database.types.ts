@@ -7,6 +7,8 @@ export type Json =
   | Json[]
 
 export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
     PostgrestVersion: "14.5"
   }
@@ -386,6 +388,7 @@ export type Database = {
           period_id: string
           source: Database["public"]["Enums"]["source_type"]
           source_document_id: string | null
+          source_pipeline_project_id: string | null
           source_rule_id: string | null
           updated_at: string | null
         }
@@ -404,6 +407,7 @@ export type Database = {
           period_id: string
           source?: Database["public"]["Enums"]["source_type"]
           source_document_id?: string | null
+          source_pipeline_project_id?: string | null
           source_rule_id?: string | null
           updated_at?: string | null
         }
@@ -422,6 +426,7 @@ export type Database = {
           period_id?: string
           source?: Database["public"]["Enums"]["source_type"]
           source_document_id?: string | null
+          source_pipeline_project_id?: string | null
           source_rule_id?: string | null
           updated_at?: string | null
         }
@@ -466,6 +471,13 @@ export type Database = {
             columns: ["period_id"]
             isOneToOne: false
             referencedRelation: "forecast_periods"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "forecast_lines_source_pipeline_project_id_fkey"
+            columns: ["source_pipeline_project_id"]
+            isOneToOne: false
+            referencedRelation: "pipeline_projects"
             referencedColumns: ["id"]
           },
         ]
@@ -545,6 +557,157 @@ export type Database = {
           },
         ]
       }
+      pipeline_allocations: {
+        Row: {
+          amount: number
+          created_at: string
+          distribution: string
+          id: string
+          month: string
+          project_id: string
+          updated_at: string
+        }
+        Insert: {
+          amount?: number
+          created_at?: string
+          distribution?: string
+          id?: string
+          month: string
+          project_id: string
+          updated_at?: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          distribution?: string
+          id?: string
+          month?: string
+          project_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pipeline_allocations_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "pipeline_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      pipeline_clients: {
+        Row: {
+          created_at: string
+          entity_id: string
+          id: string
+          is_active: boolean
+          name: string
+          notes: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          entity_id: string
+          id?: string
+          is_active?: boolean
+          name: string
+          notes?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          entity_id?: string
+          id?: string
+          is_active?: boolean
+          name?: string
+          notes?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pipeline_clients_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      pipeline_projects: {
+        Row: {
+          billing_amount: number | null
+          client_id: string
+          created_at: string
+          created_by: string | null
+          entity_id: string
+          gross_profit: number | null
+          id: string
+          invoice_date: string | null
+          is_synced: boolean
+          job_number: string | null
+          notes: string | null
+          project_name: string
+          stage: string
+          task_estimate: string | null
+          team_member: string | null
+          third_party_costs: number | null
+          updated_at: string
+        }
+        Insert: {
+          billing_amount?: number | null
+          client_id: string
+          created_at?: string
+          created_by?: string | null
+          entity_id: string
+          gross_profit?: number | null
+          id?: string
+          invoice_date?: string | null
+          is_synced?: boolean
+          job_number?: string | null
+          notes?: string | null
+          project_name: string
+          stage?: string
+          task_estimate?: string | null
+          team_member?: string | null
+          third_party_costs?: number | null
+          updated_at?: string
+        }
+        Update: {
+          billing_amount?: number | null
+          client_id?: string
+          created_at?: string
+          created_by?: string | null
+          entity_id?: string
+          gross_profit?: number | null
+          id?: string
+          invoice_date?: string | null
+          is_synced?: boolean
+          job_number?: string | null
+          notes?: string | null
+          project_name?: string
+          stage?: string
+          task_estimate?: string | null
+          team_member?: string | null
+          third_party_costs?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pipeline_projects_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "pipeline_clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pipeline_projects_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       recurring_rules: {
         Row: {
           amount: number
@@ -607,6 +770,41 @@ export type Database = {
           },
           {
             foreignKeyName: "recurring_rules_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      revenue_targets: {
+        Row: {
+          created_at: string
+          entity_id: string
+          id: string
+          month: string
+          target_amount: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          entity_id: string
+          id?: string
+          month: string
+          target_amount?: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          entity_id?: string
+          id?: string
+          month?: string
+          target_amount?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "revenue_targets_entity_id_fkey"
             columns: ["entity_id"]
             isOneToOne: false
             referencedRelation: "entities"
