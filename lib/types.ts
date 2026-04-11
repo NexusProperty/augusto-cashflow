@@ -3,6 +3,7 @@ export const AUGUSTO_GROUP_ID = 'a0000000-0000-0000-0000-000000000001'
 export const COACHMATE_GROUP_ID = 'a0000000-0000-0000-0000-000000000002'
 
 export type SourceType = 'manual' | 'document' | 'recurring' | 'pipeline'
+export type LineStatus = 'none' | 'confirmed' | 'tbc' | 'awaiting_payment' | 'paid' | 'remittance_received' | 'speculative' | 'awaiting_budget_approval'
 export type FlowDirection = 'inflow' | 'outflow' | 'balance' | 'computed'
 
 export interface ForecastLine {
@@ -17,6 +18,7 @@ export interface ForecastLine {
   notes: string | null
   sourceDocumentId: string | null
   sourceRuleId: string | null
+  lineStatus: LineStatus
 }
 
 export interface Period {

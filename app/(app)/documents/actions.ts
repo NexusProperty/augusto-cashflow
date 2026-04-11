@@ -84,6 +84,8 @@ export async function confirmExtraction(extractionId: string, overrides?: {
   categoryId?: string
   entityId?: string
   periodId?: string
+  bankAccountId?: string
+  lineStatus?: string
 }) {
   const user = await requireAuth()
   const admin = createAdminClient()
@@ -125,15 +127,20 @@ export async function confirmExtraction(extractionId: string, overrides?: {
   const periodId = overrides?.periodId
   if (!periodId) return { error: 'Period not specified — please select a forecast week' }
 
+  const bankAccountId = overrides?.bankAccountId
+  if (!bankAccountId) return { error: 'Bank account not specified — please select a bank account' }
+
   const { data: line, error: lineErr } = await admin
     .from('forecast_lines')
     .insert({
       entity_id: entityId,
       category_id: categoryId,
       period_id: periodId,
+      bank_account_id: bankAccountId,
       amount: overrides?.amount ?? extraction.amount ?? 0,
       confidence: 100,
       source: 'document',
+      line_status: overrides?.lineStatus ?? 'none',
       source_document_id: extraction.document_id,
       counterparty: extraction.counterparty,
       notes: extraction.invoice_number ? `Invoice: ${extraction.invoice_number}` : null,

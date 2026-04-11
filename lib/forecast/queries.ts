@@ -43,6 +43,7 @@ function mapForecastLine(row: any): ForecastLine {
     notes: row.notes,
     sourceDocumentId: row.source_document_id,
     sourceRuleId: row.source_rule_id,
+    lineStatus: row.line_status ?? 'confirmed',
   }
 }
 

@@ -1,23 +1,26 @@
 import { createClient } from '@/lib/supabase/server'
 import { UploadZone } from '@/components/documents/upload-zone'
+import { ExtractionReviewCard } from '@/components/documents/extraction-review-card'
 import { Badge } from '@/components/ui/badge'
-import { formatCurrency } from '@/lib/utils'
 
 export default async function DocumentsPage() {
   const supabase = await createClient()
 
-  const { data: documents } = await supabase
-    .from('documents')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(50)
-
-  const { data: pendingExtractions } = await supabase
-    .from('document_extractions')
-    .select('*, documents(filename)')
-    .eq('is_confirmed', false)
-    .eq('is_dismissed', false)
-    .order('created_at', { ascending: false })
+  const [
+    { data: documents },
+    { data: pendingExtractions },
+    { data: entities },
+    { data: categories },
+    { data: periods },
+    { data: bankAccounts },
+  ] = await Promise.all([
+    supabase.from('documents').select('*').order('created_at', { ascending: false }).limit(50),
+    supabase.from('document_extractions').select('*, documents(filename)').eq('is_confirmed', false).eq('is_dismissed', false).order('created_at', { ascending: false }),
+    supabase.from('entities').select('id, name').order('name'),
+    supabase.from('categories').select('id, name, code, flow_direction').order('sort_order'),
+    supabase.from('forecast_periods').select('id, week_ending').order('week_ending'),
+    supabase.from('bank_accounts').select('id, name, entity_id, account_number, account_type, entities(name)').eq('is_active', true).order('name'),
+  ])
 
   return (
     <div>
@@ -33,22 +36,14 @@ export default async function DocumentsPage() {
           </h2>
           <div className="space-y-2">
             {pendingExtractions.map((ext: any) => (
-              <div key={ext.id} className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white p-4">
-                <div>
-                  <p className="text-sm font-medium">{ext.counterparty ?? 'Unknown'}</p>
-                  <p className="text-xs text-zinc-500">
-                    {ext.documents?.filename} · {ext.invoice_number ?? 'No invoice #'}
-                  </p>
-                </div>
-                <div className="flex items-center gap-4">
-                  <span className="text-sm font-semibold">
-                    {ext.amount ? formatCurrency(ext.amount) : '—'}
-                  </span>
-                  <span className="text-xs text-zinc-500">
-                    {ext.expected_date ?? 'No date'}
-                  </span>
-                </div>
-              </div>
+              <ExtractionReviewCard
+                key={ext.id}
+                extraction={ext}
+                entities={entities ?? []}
+                categories={categories ?? []}
+                periods={periods ?? []}
+                bankAccounts={bankAccounts ?? []}
+              />
             ))}
           </div>
         </div>

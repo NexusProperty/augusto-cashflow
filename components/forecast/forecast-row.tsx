@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils'
 import { InlineCell } from './inline-cell'
-import type { ForecastLine, Period, SourceType } from '@/lib/types'
+import type { ForecastLine, Period, SourceType, LineStatus } from '@/lib/types'
 
 interface ForecastRowProps {
   label: string
@@ -60,6 +60,7 @@ export function ForecastRow({
             value={amount}
             isNegative={amount < 0}
             isComputed={isComputed || isSubtotal || isTotal || depth === 0}
+            lineStatus={line?.lineStatus}
             onSave={(newAmount) => onCellSave?.(p.id, newAmount)}
           />
         )

@@ -38,6 +38,16 @@ export function ForecastGrid({ periods, categories, lines, summaries }: Forecast
     .sort((a, b) => a.sortOrder - b.sortOrder)
 
   return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-zinc-500">
+        <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-3 rounded border border-emerald-300 bg-emerald-50" /> Confirmed</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-3 rounded border border-sky-300 bg-sky-50" /> TBC</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-3 rounded border border-violet-300 bg-violet-50" /> Awaiting Payment</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-3 rounded border border-green-300 bg-green-100" /> Paid</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-3 rounded border border-teal-300 bg-teal-50" /> Remittance Received</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-3 rounded border border-rose-300 bg-rose-50" /> Speculative</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-3 rounded border border-orange-300 bg-orange-50" /> Awaiting Budget Approval</span>
+      </div>
     <div className="overflow-x-auto rounded-b-lg border border-t-0 border-zinc-200">
       <table className="w-full min-w-[1200px] border-collapse text-sm">
         <thead>
@@ -124,6 +134,7 @@ export function ForecastGrid({ periods, categories, lines, summaries }: Forecast
           </tr>
         </tbody>
       </table>
+    </div>
     </div>
   )
 }
