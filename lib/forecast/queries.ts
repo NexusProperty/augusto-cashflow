@@ -74,31 +74,27 @@ export async function loadForecastData(
   lines: ForecastLine[]
   rules: RecurringRule[]
 }> {
-  // Fetch entityGroup and entities first — lines query depends on entity IDs
+  // Fetch everything in parallel — periods and categories don't depend on entity IDs,
+  // so they go in the same batch. Lines depend on entityIds, resolved after the batch.
   const [
     { data: rawEntityGroup },
     { data: rawEntities },
+    { data: rawPeriods },
+    { data: rawCategories },
+    { data: rawRules },
   ] = await Promise.all([
     supabase.from('entity_groups').select('*').eq('id', groupId).single(),
     supabase.from('entities').select('*').eq('group_id', groupId).eq('is_active', true),
+    supabase.from('forecast_periods').select('*').order('week_ending', { ascending: true }).limit(18),
+    supabase.from('categories').select('*').order('sort_order', { ascending: true }),
+    supabase.from('recurring_rules').select('*').eq('is_active', true),
   ])
 
   const entityIds = (rawEntities ?? []).map((e: any) => e.id)
 
-  // Now fetch everything that depends on resolved entity IDs
-  const [
-    { data: rawPeriods },
-    { data: rawCategories },
-    { data: rawLines },
-    { data: rawRules },
-  ] = await Promise.all([
-    supabase.from('forecast_periods').select('*').order('week_ending', { ascending: true }).limit(18),
-    supabase.from('categories').select('*').order('sort_order', { ascending: true }),
-    entityIds.length > 0
-      ? supabase.from('forecast_lines').select('*').in('entity_id', entityIds)
-      : Promise.resolve({ data: [] }),
-    supabase.from('recurring_rules').select('*').eq('is_active', true),
-  ])
+  const { data: rawLines } = entityIds.length > 0
+    ? await supabase.from('forecast_lines').select('*').in('entity_id', entityIds)
+    : { data: [] as any[] }
 
   return {
     entityGroup: rawEntityGroup ? mapEntityGroup(rawEntityGroup) : { id: groupId, name: '', odFacilityLimit: 0 },

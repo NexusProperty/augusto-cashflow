@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import { InlineCell } from './inline-cell'
 import type { ForecastLine, Period, SourceType, LineStatus } from '@/lib/types'
@@ -42,7 +43,7 @@ const statusBadgeConfig: Record<string, { label: string; classes: string }> = {
   remittance_received: { label: 'remittance', classes: 'bg-teal-50 text-teal-700 ring-teal-600/20' },
 }
 
-export function ForecastRow({
+export const ForecastRow = memo(function ForecastRow({
   label, lines, periods, depth, isSubtotal, isTotal, isComputed, source, confidence, onCellSave, badge, title, readOnlyCells, lineStatus,
 }: ForecastRowProps) {
   const rowClass = cn(
@@ -90,4 +91,4 @@ export function ForecastRow({
       })}
     </tr>
   )
-}
+})

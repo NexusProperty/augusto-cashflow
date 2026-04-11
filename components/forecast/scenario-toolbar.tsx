@@ -20,7 +20,7 @@ export function ScenarioToolbar({ scenarios, weekRange }: {
   function setParam(key: string, value: string) {
     const next = new URLSearchParams(params.toString())
     next.set(key, value)
-    router.push(`?${next.toString()}`)
+    router.replace(`?${next.toString()}`, { scroll: false })
   }
 
   return (

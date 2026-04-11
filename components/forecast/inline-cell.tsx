@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, memo } from 'react'
 import { cn, formatCurrency } from '@/lib/utils'
 
 type LineStatus = 'none' | 'confirmed' | 'tbc' | 'awaiting_payment' | 'paid' | 'remittance_received' | 'speculative' | 'awaiting_budget_approval'
@@ -25,7 +25,7 @@ interface InlineCellProps {
   className?: string
 }
 
-export function InlineCell({ value, onSave, isNegative, isComputed, lineStatus, className }: InlineCellProps) {
+export const InlineCell = memo(function InlineCell({ value, onSave, isNegative, isComputed, lineStatus, className }: InlineCellProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -81,4 +81,4 @@ export function InlineCell({ value, onSave, isNegative, isComputed, lineStatus, 
       {value === 0 ? '—' : formatCurrency(value)}
     </td>
   )
-}
+})

@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState, useEffect, useRef, useTransition } from 'react'
+import { Fragment, useState, useEffect, useRef, useTransition, memo, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { getMonthLabel } from '@/lib/pipeline/fiscal-year'
@@ -36,7 +36,7 @@ function formatAmount(n: number): string {
 // Inline amount cell
 // ---------------------------------------------------------------------------
 
-function AmountCell({
+const AmountCell = memo(function AmountCell({
   projectId,
   month,
   value,
@@ -90,7 +90,7 @@ function AmountCell({
       )}
     </td>
   )
-}
+})
 
 // ---------------------------------------------------------------------------
 // Main grid
@@ -117,36 +117,36 @@ export function PipelineGrid({
   }
   const clientGroups = Array.from(byClient.entries()).sort(([a], [b]) => a.localeCompare(b))
 
-  function navigateEntity(entityId: string) {
+  const navigateEntity = useCallback((entityId: string) => {
     const params = new URLSearchParams(searchParams.toString())
     params.set('entity', entityId)
-    router.push(`?${params.toString()}`)
-  }
+    router.replace(`?${params.toString()}`, { scroll: false })
+  }, [searchParams, router])
 
-  function handleAmountSave(projectId: string, month: string, amount: number) {
+  const handleAmountSave = useCallback((projectId: string, month: string, amount: number) => {
     startTransition(async () => {
       await updateAllocations({ projectId, allocations: [{ month, amount, distribution: 'even' }] })
     })
-  }
+  }, [startTransition])
 
-  function handleStageChange(projectId: string, stage: PipelineStage) {
+  const handleStageChange = useCallback((projectId: string, stage: PipelineStage) => {
     startTransition(async () => {
       await updateProjectStage(projectId, stage)
     })
-  }
+  }, [startTransition])
 
-  function handleDelete(projectId: string) {
+  const handleDelete = useCallback((projectId: string) => {
     if (!confirm('Delete this project? This will also remove any synced forecast lines.')) return
     startTransition(async () => {
       await deleteProject(projectId)
     })
-  }
+  }, [startTransition])
 
-  function handleToggleSync(projectId: string, currentSynced: boolean) {
+  const handleToggleSync = useCallback((projectId: string, currentSynced: boolean) => {
     startTransition(async () => {
       await toggleProjectSync(projectId, !currentSynced)
     })
-  }
+  }, [startTransition])
 
   return (
     <>

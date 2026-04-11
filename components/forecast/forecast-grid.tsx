@@ -1,6 +1,6 @@
 'use client'
 
-import { useTransition, useState, useCallback } from 'react'
+import { useTransition, useState, useCallback, useMemo, memo } from 'react'
 import { ForecastRow } from './forecast-row'
 import { Badge } from '@/components/ui/badge'
 import { updateLineAmount } from '@/app/(app)/forecast/actions'
@@ -45,38 +45,40 @@ function buildItemRows(
 export function ForecastGrid({ periods, categories, lines, summaries }: ForecastGridProps) {
   const [, startTransition] = useTransition()
 
-  const summaryMap = new Map(summaries.map((s) => [s.periodId, s]))
+  const summaryMap = useMemo(() => new Map(summaries.map((s) => [s.periodId, s])), [summaries])
 
-  function handleCellSave(lineId: string, amount: number) {
+  const handleCellSave = useCallback((lineId: string, amount: number) => {
     const fd = new FormData()
     fd.set('lineId', lineId)
     fd.set('amount', String(amount))
     startTransition(() => { updateLineAmount(fd) })
-  }
+  }, [startTransition])
 
-  const sections = categories
-    .filter((c) => c.parentId === null && c.flowDirection !== 'computed')
-    .sort((a, b) => a.sortOrder - b.sortOrder)
-
-  // Determine whether a section has any non-zero data (for default collapsed state)
-  function sectionHasData(section: Category): boolean {
-    const children = categories.filter((c) => c.parentId === section.id)
-    return lines.some((l) => {
-      if (l.amount === 0) return false
-      const cat = categories.find((c) => c.id === l.categoryId)
-      if (!cat) return false
-      return (
-        cat.parentId === section.id ||
-        children.some((sc) => sc.id === cat.parentId || sc.id === cat.id)
-      )
-    })
-  }
+  const sections = useMemo(
+    () => categories
+      .filter((c) => c.parentId === null && c.flowDirection !== 'computed')
+      .sort((a, b) => a.sortOrder - b.sortOrder),
+    [categories],
+  )
 
   // Default collapsed: sections with no data start collapsed
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
+    const sects = categories
+      .filter((c) => c.parentId === null && c.flowDirection !== 'computed')
+      .sort((a, b) => a.sortOrder - b.sortOrder)
     const init: Record<string, boolean> = {}
-    for (const section of sections) {
-      init[section.id] = !sectionHasData(section)
+    for (const section of sects) {
+      const children = categories.filter((c) => c.parentId === section.id)
+      const hasData = lines.some((l) => {
+        if (l.amount === 0) return false
+        const cat = categories.find((c) => c.id === l.categoryId)
+        if (!cat) return false
+        return (
+          cat.parentId === section.id ||
+          children.some((sc) => sc.id === cat.parentId || sc.id === cat.id)
+        )
+      })
+      init[section.id] = !hasData
     }
     return init
   })
@@ -87,19 +89,21 @@ export function ForecastGrid({ periods, categories, lines, summaries }: Forecast
     setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }))
   }, [])
 
-  // Compute total hidden rows for the footer (pure computation, no side effects)
-  const totalHiddenCount = sections.reduce((total, section) => {
-    if (!hideEmpty) return total
-    const children = categories
-      .filter((c) => c.parentId === section.id)
-      .sort((a, b) => a.sortOrder - b.sortOrder)
-    const { itemMap } = buildItemRows(section, children, categories, lines)
-    let hidden = 0
-    for (const itemLines of itemMap.values()) {
-      if (itemLines.every((l) => l.amount === 0)) hidden++
-    }
-    return total + hidden
-  }, 0)
+  // Compute total hidden rows for the footer — memoized to avoid O(n*m) on every render
+  const totalHiddenCount = useMemo(() => {
+    if (!hideEmpty) return 0
+    return sections.reduce((total, section) => {
+      const children = categories
+        .filter((c) => c.parentId === section.id)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+      const { itemMap } = buildItemRows(section, children, categories, lines)
+      let hidden = 0
+      for (const itemLines of itemMap.values()) {
+        if (itemLines.every((l) => l.amount === 0)) hidden++
+      }
+      return total + hidden
+    }, 0)
+  }, [hideEmpty, sections, categories, lines])
 
   return (
     <div>
@@ -154,26 +158,19 @@ export function ForecastGrid({ periods, categories, lines, summaries }: Forecast
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100">
-            {sections.map((section) => {
-              const children = categories
-                .filter((c) => c.parentId === section.id)
-                .sort((a, b) => a.sortOrder - b.sortOrder)
-
-              return (
-                <SectionBlock
-                  key={section.id}
-                  section={section}
-                  sectionChildren={children}
-                  categories={categories}
-                  periods={periods}
-                  lines={lines}
-                  onCellSave={handleCellSave}
-                  collapsed={collapsed[section.id] ?? false}
-                  onToggle={() => toggleSection(section.id)}
-                  hideEmpty={hideEmpty}
-                />
-              )
-            })}
+            {sections.map((section) => (
+              <SectionBlock
+                key={section.id}
+                section={section}
+                categories={categories}
+                periods={periods}
+                lines={lines}
+                onCellSave={handleCellSave}
+                collapsed={collapsed[section.id] ?? false}
+                onToggle={toggleSection}
+                hideEmpty={hideEmpty}
+              />
+            ))}
 
             {/* Net Operating */}
             <tr className="border-t-2 border-zinc-300 bg-zinc-50 font-semibold">
@@ -301,9 +298,8 @@ function getSectionStyle(flowDirection: string) {
 
 // ── SectionBlock ─────────────────────────────────────────────────────────────
 
-function SectionBlock({
+const SectionBlock = memo(function SectionBlock({
   section,
-  sectionChildren,
   categories,
   periods,
   lines,
@@ -313,51 +309,72 @@ function SectionBlock({
   hideEmpty,
 }: {
   section: Category
-  sectionChildren: Category[]
   categories: Category[]
   periods: Period[]
   lines: ForecastLine[]
   onCellSave: (lineId: string, amount: number) => void
   collapsed: boolean
-  onToggle: () => void
+  onToggle: (id: string) => void
   hideEmpty: boolean
 }) {
   const style = getSectionStyle(section.flowDirection)
 
-  const { sectionLines, itemMap } = buildItemRows(section, sectionChildren, categories, lines)
+  const sectionChildren = useMemo(
+    () => categories
+      .filter((c) => c.parentId === section.id)
+      .sort((a, b) => a.sortOrder - b.sortOrder),
+    [categories, section.id],
+  )
+
+  const { sectionLines, itemMap } = useMemo(
+    () => buildItemRows(section, sectionChildren, categories, lines),
+    [section, sectionChildren, categories, lines],
+  )
 
   // Determine which item keys are all-zero across all periods
-  const emptyKeys = new Set<string>()
-  for (const [key, itemLines] of itemMap) {
-    if (itemLines.every((l) => l.amount === 0)) {
-      emptyKeys.add(key)
+  const emptyKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const [key, itemLines] of itemMap) {
+      if (itemLines.every((l) => l.amount === 0)) {
+        keys.add(key)
+      }
     }
-  }
+    return keys
+  }, [itemMap])
 
-  const allZero = sectionLines.every((l) => l.amount === 0)
+  const allZero = useMemo(
+    () => sectionLines.every((l) => l.amount === 0),
+    [sectionLines],
+  )
 
   // Section totals per period column
-  const sectionTotals = periods.map((p) =>
-    sectionLines
-      .filter((l) => l.periodId === p.id)
-      .reduce((sum, l) => sum + l.amount, 0),
+  const sectionTotals = useMemo(
+    () => periods.map((p) =>
+      sectionLines
+        .filter((l) => l.periodId === p.id)
+        .reduce((sum, l) => sum + l.amount, 0),
+    ),
+    [periods, sectionLines],
   )
 
   // Build ordered item rows from the map (preserves insertion order = line order)
-  const itemRows = Array.from(itemMap.entries()).map(([key, itemLines]) => {
-    const firstLine = itemLines[0]!
-    const label = firstLine.counterparty ?? firstLine.notes ?? 'Line item'
-    const lineMap = new Map(itemLines.map((l) => [l.periodId, l]))
-    const isPipeline = firstLine.source === 'pipeline'
-    return { key, label, lineMap, isPipeline, line: firstLine }
-  })
+  const itemRows = useMemo(
+    () => Array.from(itemMap.entries()).map(([key, itemLines]) => {
+      const firstLine = itemLines[0]!
+      const label = firstLine.counterparty ?? firstLine.notes ?? 'Line item'
+      const lineMap = new Map(itemLines.map((l) => [l.periodId, l]))
+      const isPipeline = firstLine.source === 'pipeline'
+      return { key, label, lineMap, isPipeline, line: firstLine }
+    }),
+    [itemMap],
+  )
 
   return (
     <>
       {/* Colour-coded collapsible section header */}
       <tr
         className={cn('cursor-pointer border-b border-zinc-200', style.headerBg)}
-        onClick={onToggle}
+        onClick={() => onToggle(section.id)}
       >
         <td className={cn('sticky left-0 z-10 px-3 py-2', style.stickyBg)}>
           <div className="flex items-center gap-2">
@@ -472,4 +489,4 @@ function SectionBlock({
       )}
     </>
   )
-}
+})
