@@ -126,7 +126,7 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
 
                   {!isCollapsed && (
                     <>
-                      <SubRow label="Confirmed + Awaiting" values={row.confirmedAndAwaiting} />
+                      <SubRow label="Confirmed + Awaiting" values={row.confirmedAndAwaiting} highlight />
                       <SubRow label="Upcoming & Speculative" values={row.upcomingAndSpeculative} />
                       <SubRow label="Total Forecast" values={row.totalForecast} bold />
                       <SubRow label="Target" values={row.target} />
@@ -150,7 +150,7 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
                   </td>
                 </tr>
 
-                <SubRow label="Confirmed + Awaiting" values={groupConfirmedAndAwaiting} groupTotal />
+                <SubRow label="Confirmed + Awaiting" values={groupConfirmedAndAwaiting} groupTotal highlight />
                 <SubRow label="Upcoming & Speculative" values={groupUpcomingAndSpeculative} groupTotal />
                 <SubRow label="Total Forecast" values={groupTotalForecast} bold groupTotal />
                 <SubRow label="Target" values={groupTarget} groupTotal />
@@ -175,12 +175,14 @@ function SubRow({
   bold = false,
   italic = false,
   groupTotal = false,
+  highlight = false,
 }: {
   label: string
   values: number[]
   bold?: boolean
   italic?: boolean
   groupTotal?: boolean
+  highlight?: boolean
 }) {
   const total = sumArray(values)
   const bgClass = groupTotal ? 'bg-zinc-50' : 'bg-white'
@@ -200,10 +202,11 @@ function SubRow({
         <td
           key={i}
           className={cn(
-            'px-2.5 py-1.5 text-right tabular-nums text-sm text-zinc-900',
+            'px-2.5 py-1.5 text-right tabular-nums text-sm',
             groupTotal && 'bg-zinc-50',
             bold && 'font-semibold',
             italic && 'italic',
+            highlight && v !== 0 ? 'text-emerald-600' : 'text-zinc-900',
           )}
         >
           {v === 0 ? (
@@ -215,10 +218,11 @@ function SubRow({
       ))}
       <td
         className={cn(
-          'px-3 py-1.5 text-right tabular-nums text-sm text-zinc-900',
+          'px-3 py-1.5 text-right tabular-nums text-sm',
           groupTotal && 'bg-zinc-50',
           bold && 'font-semibold',
           italic && 'italic',
+          highlight && total !== 0 ? 'text-emerald-600' : 'text-zinc-900',
         )}
       >
         {total === 0 ? (

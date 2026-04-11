@@ -39,6 +39,7 @@ const statusBadgeConfig: Record<string, { label: string; classes: string }> = {
   awaiting_budget_approval: { label: 'awaiting', classes: 'bg-amber-50 text-amber-700 ring-amber-600/20' },
   awaiting_payment: { label: 'awaiting payment', classes: 'bg-violet-50 text-violet-700 ring-violet-600/20' },
   paid: { label: 'paid', classes: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' },
+  remittance_received: { label: 'remittance', classes: 'bg-teal-50 text-teal-700 ring-teal-600/20' },
 }
 
 export function ForecastRow({

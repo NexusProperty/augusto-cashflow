@@ -1,6 +1,7 @@
 'use client'
 
 import type { WeekSummary } from '@/lib/types'
+import { formatCurrencyCompact } from '@/lib/utils'
 import { SummaryCards } from './summary-cards'
 import { ClosingBalanceChart } from './closing-balance-chart'
 import { CondensedTable } from './condensed-table'
@@ -84,7 +85,7 @@ function PipelineBreakdown({
             <div className="flex justify-between text-xs mb-1">
               <span className="text-zinc-500">{label}</span>
               <span className="font-medium text-zinc-900">
-                {value > 0 ? `$${Math.round(value / 1000)}K` : '—'}
+                {value > 0 ? formatCurrencyCompact(value) : '—'}
               </span>
             </div>
             <div className="h-2 bg-zinc-100 rounded-full">

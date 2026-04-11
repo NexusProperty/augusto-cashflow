@@ -7,6 +7,7 @@ interface SummaryCardsProps {
   pipelineTotal: number
   pipelineWeighted: number
   odFacilityLimit: number
+  groupTarget?: number
 }
 
 export function SummaryCards({
@@ -15,16 +16,18 @@ export function SummaryCards({
   pipelineTotal,
   pipelineWeighted,
   odFacilityLimit,
+  groupTarget,
 }: SummaryCardsProps) {
   const closingBalance = currentWeek?.closingBalance ?? 0
   const availableCash = currentWeek?.availableCash ?? 0
 
   const odUtilPct =
     odFacilityLimit > 0
-      ? Math.min(((odFacilityLimit - availableCash) / odFacilityLimit) * 100, 100)
+      ? Math.max(0, Math.min(((odFacilityLimit - availableCash) / odFacilityLimit) * 100, 100))
       : 0
 
-  const pipelinePct = Math.min((pipelineTotal / 675_000) * 100, 100)
+  const target = groupTarget ?? 675_000
+  const pipelinePct = Math.min((pipelineTotal / target) * 100, 100)
 
   return (
     <div className="grid grid-cols-4 divide-x divide-zinc-100">
@@ -92,18 +95,18 @@ export function SummaryCards({
       {/* 4 — Pipeline */}
       <div className="px-5 py-5">
         <div className="text-xs font-medium text-zinc-500">Pipeline</div>
-        <div className="mt-1 text-2xl font-bold tabular-nums text-zinc-900">
+        <div className={cn('mt-1 text-2xl font-bold tabular-nums', pipelineTotal > 0 ? 'text-amber-600' : 'text-zinc-900')}>
           {formatCurrency(pipelineTotal)}
         </div>
         <div className="mt-2">
           <div className="h-1.5 w-full rounded-full bg-zinc-100">
             <div
-              className="h-1.5 rounded-full bg-sky-500"
+              className="h-1.5 rounded-full bg-amber-500"
               style={{ width: `${Math.max(pipelinePct, pipelineTotal > 0 ? 2 : 0)}%` }}
             />
           </div>
           <div className="mt-1 text-xs text-zinc-400">
-            {Math.round(pipelinePct)}% of target · weighted {formatCurrency(pipelineWeighted)}
+            {Math.round(pipelinePct)}% of {formatCurrency(target)} · weighted {formatCurrency(pipelineWeighted)}
           </div>
         </div>
       </div>

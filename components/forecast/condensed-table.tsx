@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { cn, formatCurrency } from '@/lib/utils'
 import type { WeekSummary } from '@/lib/types'
 
@@ -26,9 +27,9 @@ export function CondensedTable({ summaries, maxWeeks = 8 }: CondensedTableProps)
     <div>
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-semibold text-zinc-900">Weekly Cash Flow</h3>
-        <a href="/forecast/detail" className="text-sm text-blue-600 font-medium hover:text-blue-500">
+        <Link href="/forecast/detail" className="text-sm text-blue-600 font-medium hover:text-blue-500">
           Full Detail &rarr;
-        </a>
+        </Link>
       </div>
       <table className="min-w-full text-sm tabular-nums">
         <thead>
@@ -71,7 +72,7 @@ export function CondensedTable({ summaries, maxWeeks = 8 }: CondensedTableProps)
                 s.closingBalance < 0 ? 'text-rose-300' : 'text-white',
                 i === visible.length - 1 && 'rounded-r-lg',
               )}>
-                {formatCurrency(s.closingBalance)}
+                {s.closingBalance !== 0 ? formatCurrency(s.closingBalance) : '—'}
               </td>
             ))}
           </tr>
@@ -79,7 +80,7 @@ export function CondensedTable({ summaries, maxWeeks = 8 }: CondensedTableProps)
             <td className="py-2 pr-3 text-zinc-600">Available (OD)</td>
             {visible.map((s) => (
               <td key={s.periodId} className="py-2 px-2 text-right text-emerald-600">
-                {formatCurrency(s.availableCash)}
+                {s.availableCash !== 0 ? formatCurrency(s.availableCash) : '—'}
               </td>
             ))}
           </tr>

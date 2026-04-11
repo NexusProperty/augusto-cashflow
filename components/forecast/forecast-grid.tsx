@@ -396,16 +396,47 @@ function SectionBlock({
       {/* Sub-section label rows + data rows — only when not collapsed */}
       {!collapsed && (
         <>
-          {sectionChildren.map((sub) => (
-            <ForecastRow
-              key={sub.id}
-              label={sub.sectionNumber ? `${sub.sectionNumber}. ${sub.name}` : sub.name}
-              lines={new Map()}
-              periods={periods}
-              depth={1}
-              isComputed
-            />
-          ))}
+          {sectionChildren.map((sub) => {
+            // Compute sub-section totals: sum lines belonging to this sub-section per period
+            const subLines = sectionLines.filter((l) => {
+              const cat = categories.find((c) => c.id === l.categoryId)
+              if (!cat) return false
+              return cat.parentId === sub.id || cat.id === sub.id
+            })
+            const subLineMap = new Map<string, ForecastLine>()
+            for (const period of periods) {
+              const periodTotal = subLines
+                .filter((l) => l.periodId === period.id)
+                .reduce((sum, l) => sum + l.amount, 0)
+              if (periodTotal !== 0) {
+                // Synthesize a virtual line for totalling purposes
+                subLineMap.set(period.id, {
+                  id: `sub-total-${sub.id}-${period.id}`,
+                  entityId: '',
+                  periodId: period.id,
+                  categoryId: sub.id,
+                  amount: periodTotal,
+                  counterparty: null,
+                  notes: null,
+                  source: 'manual',
+                  confidence: 100,
+                  sourceDocumentId: null,
+                  sourceRuleId: null,
+                  lineStatus: 'none',
+                })
+              }
+            }
+            return (
+              <ForecastRow
+                key={sub.id}
+                label={sub.sectionNumber ? `${sub.sectionNumber}. ${sub.name}` : sub.name}
+                lines={subLineMap}
+                periods={periods}
+                depth={1}
+                isComputed
+              />
+            )
+          })}
 
           {itemRows.map(({ key, label, lineMap, isPipeline, line }) => {
             if (hideEmpty && emptyKeys.has(key)) return null
@@ -422,7 +453,10 @@ function SectionBlock({
                 onCellSave={
                   isPipeline
                     ? undefined
-                    : (_periodId, amount) => onCellSave(line.id, amount)
+                    : (periodId, amount) => {
+                        const targetLine = lineMap.get(periodId)
+                        if (targetLine) onCellSave(targetLine.id, amount)
+                      }
                 }
                 readOnlyCells={isPipeline}
                 badge={
