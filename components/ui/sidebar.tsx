@@ -37,8 +37,13 @@ function CogIcon({ className }: { className?: string }) {
 }
 
 const topNavItems = [
-  { label: 'Forecast', href: '/forecast', icon: ChartIcon },
   { label: 'Documents', href: '/documents', icon: DocumentIcon },
+]
+
+const forecastSubItems = [
+  { label: 'Overview', href: '/forecast' },
+  { label: 'Detail', href: '/forecast/detail' },
+  { label: 'Compare', href: '/forecast/compare' },
 ]
 
 const pipelineSubItems = [
@@ -53,6 +58,7 @@ const bottomNavItems = [
 
 export function Sidebar() {
   const pathname = usePathname()
+  const forecastActive = pathname.startsWith('/forecast')
   const pipelineActive = pathname.startsWith('/pipeline')
 
   return (
@@ -62,6 +68,41 @@ export function Sidebar() {
         <p className="text-xs text-zinc-500">Cash Flow Forecast</p>
       </div>
       <nav className="flex-1 space-y-0.5 px-3">
+        {/* Forecast section */}
+        <Link
+          href="/forecast"
+          className={cn(
+            'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+            forecastActive
+              ? 'bg-zinc-100 text-zinc-900'
+              : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
+          )}
+        >
+          <ChartIcon className={cn('h-5 w-5', forecastActive ? 'text-zinc-900' : 'text-zinc-400')} />
+          Forecast
+        </Link>
+        {forecastActive && (
+          <div className="ml-8 space-y-0.5">
+            {forecastSubItems.map((sub) => {
+              const subActive = pathname === sub.href
+              return (
+                <Link
+                  key={sub.href}
+                  href={sub.href}
+                  className={cn(
+                    'block rounded-lg px-3 py-1.5 text-sm transition-colors',
+                    subActive
+                      ? 'font-medium text-zinc-900'
+                      : 'text-zinc-500 hover:text-zinc-900'
+                  )}
+                >
+                  {sub.label}
+                </Link>
+              )
+            })}
+          </div>
+        )}
+
         {topNavItems.map((item) => {
           const Icon = item.icon
           const active = pathname.startsWith(item.href)
