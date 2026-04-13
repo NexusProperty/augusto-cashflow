@@ -14,11 +14,13 @@ const AUTO_CONFIRM_THRESHOLD = 0.9
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 async function extractText(blob: Blob, mimeType: string): Promise<string> {
-  const buffer = Buffer.from(await blob.arrayBuffer())
+  const arrayBuffer = await blob.arrayBuffer()
+  const buffer = Buffer.from(arrayBuffer)
 
   if (mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || mimeType === 'application/vnd.ms-excel') {
     const workbook = new ExcelJS.Workbook()
-    await workbook.xlsx.load(buffer)
+    // ExcelJS.Buffer accepts ArrayBuffer directly — avoids the Node Buffer generic mismatch.
+    await workbook.xlsx.load(arrayBuffer)
     const sheets: string[] = []
     workbook.eachSheet((sheet) => {
       const rows: string[] = [`=== Sheet: ${sheet.name} ===`]
