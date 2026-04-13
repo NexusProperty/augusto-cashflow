@@ -19,6 +19,9 @@ insert into entities (id, group_id, name, code) values
   ('e0000000-0000-0000-0000-000000000008', 'a0000000-0000-0000-0000-000000000002', 'Coachmate', 'CM')
 on conflict do nothing;
 
+-- Flag non-pipeline entities (added by migration 020)
+update entities set is_pipeline_entity = false where code in ('AGC', 'ENT');
+
 -- Bank Accounts (matching the Excel)
 insert into bank_accounts (entity_id, name, account_type, od_limit) values
   ('e0000000-0000-0000-0000-000000000001', 'AUG OD Account', 'overdraft', 900000),
@@ -47,12 +50,29 @@ on conflict do nothing;
 insert into categories (id, parent_id, name, code, section_number, sort_order, is_system, flow_direction) values
   ('c0000000-0000-0000-0000-000000000010', 'c0000000-0000-0000-0000-000000000002', 'Accounts Receivable', 'inflows_ar', '2a', 210, true, 'inflow'),
   ('c0000000-0000-0000-0000-000000000011', 'c0000000-0000-0000-0000-000000000002', 'Other Cash Receipts', 'inflows_other', '2b', 220, true, 'inflow'),
-  ('c0000000-0000-0000-0000-000000000012', 'c0000000-0000-0000-0000-000000000002', 'GST (Net)', 'inflows_gst', '2c', 230, true, 'inflow'),
   ('c0000000-0000-0000-0000-000000000020', 'c0000000-0000-0000-0000-000000000003', 'Payroll', 'outflows_payroll', '3a', 310, true, 'outflow'),
   ('c0000000-0000-0000-0000-000000000021', 'c0000000-0000-0000-0000-000000000003', 'PAYE', 'outflows_paye', '3b', 320, true, 'outflow'),
-  ('c0000000-0000-0000-0000-000000000022', 'c0000000-0000-0000-0000-000000000003', 'Direct Debits & Fixed Overheads', 'outflows_dd', '3c', 330, true, 'outflow'),
+  ('c0000000-0000-0000-0000-000000000022', 'c0000000-0000-0000-0000-000000000003', 'Fixed Overheads', 'outflows_dd', '3c', 330, true, 'outflow'),
   ('c0000000-0000-0000-0000-000000000023', 'c0000000-0000-0000-0000-000000000003', 'Rent', 'outflows_rent', '3d', 340, true, 'outflow'),
   ('c0000000-0000-0000-0000-000000000024', 'c0000000-0000-0000-0000-000000000003', 'Supplier Batch Payments (AP)', 'outflows_ap', '3e', 350, true, 'outflow')
+on conflict do nothing;
+
+-- Level 1: Non-system sub-sections added by migration 020 (category restructure)
+-- Use gen_random_uuid() since ids are not stable; on conflict on the code unique index (if present) falls through.
+insert into categories (id, parent_id, name, code, section_number, sort_order, is_system, flow_direction) values
+  (gen_random_uuid(), 'c0000000-0000-0000-0000-000000000002', 'GST Refund',                          'inflows_gst_refund',       '2c', 230, false, 'inflow'),
+  (gen_random_uuid(), 'c0000000-0000-0000-0000-000000000002', 'Confirmed Revenue (Revenue Tracker)', 'inflows_revenue_tracker',  '2d', 240, false, 'inflow'),
+  (gen_random_uuid(), 'c0000000-0000-0000-0000-000000000003', 'Contractors',                         'outflows_contractors',     '3b', 315, false, 'outflow'),
+  (gen_random_uuid(), 'c0000000-0000-0000-0000-000000000003', 'GST Payment',                         'outflows_gst_payment',     '3f', 355, false, 'outflow'),
+  (gen_random_uuid(), 'c0000000-0000-0000-0000-000000000003', 'Credit Cards',                        'outflows_credit_cards',    '3h', 365, false, 'outflow'),
+  (gen_random_uuid(), 'c0000000-0000-0000-0000-000000000004', 'BNZ Loan',                            'loans_bnz',                '4c', 430, false, 'outflow'),
+  (gen_random_uuid(), 'c0000000-0000-0000-0000-000000000004', 'Loan OD & Interest Fees',             'loans_od_interest',        '4d', 440, false, 'outflow')
+on conflict do nothing;
+
+-- Nested third-party supplier costs under AP (parent resolved via lookup)
+insert into categories (id, parent_id, name, code, section_number, sort_order, is_system, flow_direction)
+select gen_random_uuid(), id, 'Third Party Supplier Costs', 'outflows_ap_third_party', '3i.1', 355, false, 'outflow'
+from categories where code = 'outflows_ap'
 on conflict do nothing;
 
 -- Forecast Periods: generate 52 weeks from 2026-03-27
