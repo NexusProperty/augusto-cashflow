@@ -10,6 +10,7 @@
  */
 
 import type { FlatRow } from '@/lib/forecast/flat-rows'
+import { collectFormulaReferences } from '@/lib/forecast/formula'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -25,55 +26,9 @@ export interface DepGraphLine {
   notes: string | null
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Internal: formula reference extraction (no evaluation)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Extract the set of itemKeys that a formula references, WITHOUT evaluating it.
- * We do a lightweight scan for @label:W<n> patterns and W<n> tokens.
- * Errors (unknown label, out-of-range col) are silently ignored here — the
- * full evaluator handles them at evaluation time.
- */
-function extractFormulaRefs(
-  formula: string,
-  currentItemKey: string,
-  flatRows: FlatRow[],
-): Set<string> {
-  const refs = new Set<string>()
-
-  // Always depends on self for plain W<n> refs (current row)
-  // We only add specific keys we can detect.
-
-  const text = formula.startsWith('=') ? formula.slice(1) : formula
-
-  // Pattern: @<label>:W<n>  or  @<label>:W<n>:W<m>
-  // Capture the label
-  const atPattern = /@([A-Za-z0-9 _-]+)\s*:/g
-  let m: RegExpExecArray | null
-  while ((m = atPattern.exec(text)) !== null) {
-    const label = m[1]!.trim().toLowerCase()
-    // Find matching row
-    for (const row of flatRows) {
-      if (row.kind !== 'item') continue
-      const parts = row.itemKey.split('::')
-      const rowLabel = parts.slice(1).join('::').trim().toLowerCase()
-      if (rowLabel === label) {
-        refs.add(row.itemKey)
-        break
-      }
-    }
-  }
-
-  // Plain W<n> refs (no @ prefix): depend on the current row
-  // Use a regex that matches W<digits> NOT preceded by a colon (i.e. already captured in @-refs)
-  // Simple approach: if there's any W<n> token, the formula depends on currentItemKey
-  if (/W\d+/i.test(text)) {
-    refs.add(currentItemKey)
-  }
-
-  return refs
-}
+// Formula reference extraction is handled by collectFormulaReferences from
+// formula.ts — this ensures the dep-graph stays in sync with the tokeniser
+// grammar as it evolves (e.g. new @ label character classes, new operators).
 
 // ─────────────────────────────────────────────────────────────────────────────
 // buildDependencyGraph
@@ -110,7 +65,7 @@ export function buildDependencyGraph(
     const label = line.counterparty ?? line.notes ?? 'Line item'
     const currentItemKey = `${line.categoryId}::${label}`
 
-    const referencedItemKeys = extractFormulaRefs(line.formula, currentItemKey, flatRows)
+    const referencedItemKeys = new Set(collectFormulaReferences(line.formula, currentItemKey, flatRows))
 
     // Collect all lineIds for the referenced itemKeys, excluding self
     const depIds: string[] = []

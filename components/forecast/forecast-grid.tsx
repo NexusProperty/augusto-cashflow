@@ -543,6 +543,21 @@ export function ForecastGrid({
       // THIS edit's new values in its own `old`, not the stale pre-edit ones.
       for (const u of updates) snapshotRef.current.set(u.id, u.amount)
 
+      // Build an in-memory post-edit snapshot BEFORE calling applyLocal.
+      // applyLocal schedules a setState which is async — localLinesRef.current
+      // still holds the pre-edit values at this point. computeCascade must
+      // evaluate formula dependents against the NEW values, not the stale ones.
+      const updateMap = new Map(updates.map((u) => [u.id, u]))
+      const postEditLines = localLinesRef.current.map((l) => {
+        const u = updateMap.get(l.id)
+        if (!u) return l
+        return {
+          ...l,
+          amount: u.amount,
+          ...(u.formula !== undefined ? { formula: u.formula } : {}),
+        }
+      })
+
       // Optimistic UI — apply direct edits first.
       applyLocal(updates)
 
@@ -550,10 +565,12 @@ export function ForecastGrid({
       // After applying the direct edits, re-evaluate any formula cells that
       // transitively depend on the edited cells. The results are merged into
       // the same server batch and undo entry so the whole operation is atomic.
+      // We pass postEditLines (not localLinesRef.current) so cascade sees the
+      // post-edit values and avoids evaluating against stale pre-edit amounts.
       const editedIds = updates.map((u) => u.id)
       const cascadeResult = computeCascade(
         editedIds,
-        localLinesRef.current,
+        postEditLines,
         formulaGraphRef.current,
         flatRowsRef.current,
         periodsRef.current,
@@ -667,6 +684,7 @@ export function ForecastGrid({
         sourceRuleId: null,
         sourcePipelineProjectId: null,
         lineStatus: 'confirmed',
+        formula: null,
       }
 
       setLocalLines((prev) => [...prev, optimisticLine])
@@ -718,6 +736,7 @@ export function ForecastGrid({
                   (raw.source_pipeline_project_id as string | null) ?? null,
                 lineStatus:
                   (raw.line_status as ForecastLine['lineStatus']) ?? 'confirmed',
+                formula: (raw.formula as string | null) ?? null,
               }
               setLocalLines((prev) =>
                 prev.map((l) => (l.id === tempId ? real : l)),
@@ -766,6 +785,7 @@ export function ForecastGrid({
         sourceRuleId: null,
         sourcePipelineProjectId: null,
         lineStatus: 'confirmed',
+        formula: null,
       }
       handleEmptyCellCreate(template, periodId, amount, 'Create subtotal cell')
     },
@@ -1428,6 +1448,12 @@ export function ForecastGrid({
             const lineSnapshot = localLinesRef.current.find((l) => l.id === sub.realId) ?? null
             const res = await deleteForecastLine(sub.realId)
             if (res && 'error' in res) {
+              // Mid-loop failure: push the ORIGINAL compound back onto undo so
+              // the user can retry once the server recovers. Sub-entries already
+              // processed have mutated local state but this is the best we can do
+              // without a full two-phase commit. The user sees an error chip and
+              // Ctrl+Z remains available for retry.
+              undoStackRef.current.pushUndoPreserveRedo(entry)
               markError(res.error ?? 'Delete failed')
               return
             }
@@ -1445,6 +1471,9 @@ export function ForecastGrid({
           } else if (sub.kind === 'deleted') {
             const result = await bulkAddForecastLines(sub.lines)
             if ('error' in result) {
+              // Mid-loop failure: push original compound back for retry (same
+              // rationale as the deleteForecastLine failure case above).
+              undoStackRef.current.pushUndoPreserveRedo(entry)
               markError(result.error)
               return
             }
@@ -1809,7 +1838,7 @@ export function ForecastGrid({
       setSelection((prev) => (prev ? extendByArrow(prev, dir, rowMax, colMax, isFocusableRow) : prev))
       e.preventDefault()
     },
-    [selection, extraSelected, range, flatRows, periods, isFocusableRow, buildCopyGrid, applyPasteGrid, replayUndo, replayRedo],
+    [selection, extraSelected, range, flatRows, periods, isFocusableRow, buildCopyGrid, applyPasteGrid, replayUndo, replayRedo, markError],
   )
 
   // ── Subtotal proration handler ────────────────────────────────────────────
@@ -1823,13 +1852,13 @@ export function ForecastGrid({
         return
       }
       if (result.reason === 'all-pipeline') {
-        console.warn('Subtotal edit: all lines are pipeline-synced — edit in Pipeline page')
+        markError('Cannot edit: all lines in this sub-category are pipeline-synced — edit in Pipeline page')
         return
       }
       if (result.changed.length === 0) return
       saveUpdates(result.changed)
     },
-    [localLines, saveUpdates, handleEmptySubtotalCreate],
+    [localLines, saveUpdates, handleEmptySubtotalCreate, markError],
   )
 
   // ── Multi-cell status change ──────────────────────────────────────────────
@@ -2260,6 +2289,7 @@ export function ForecastGrid({
         sourceRuleId: null,
         sourcePipelineProjectId: null,
         lineStatus: c.lineStatus,
+        formula: null,
       }))
       if (tempLines.length > 0) {
         setLocalLines((prev) => [...prev, ...tempLines])
@@ -2457,6 +2487,7 @@ export function ForecastGrid({
       sourceRuleId: null,
       sourcePipelineProjectId: null,
       lineStatus: c.lineStatus,
+      formula: null,
     }))
     if (tempLines.length > 0) {
       setLocalLines((prev) => [...prev, ...tempLines])
@@ -2688,6 +2719,7 @@ export function ForecastGrid({
         sourceRuleId: null,
         sourcePipelineProjectId: null,
         lineStatus: c.lineStatus,
+        formula: null,
       }))
       if (tempLines.length > 0) {
         setLocalLines((prev) => [...prev, ...tempLines])
@@ -2887,6 +2919,7 @@ export function ForecastGrid({
         sourceRuleId: null,
         sourcePipelineProjectId: null,
         lineStatus: c.lineStatus,
+        formula: null,
       }))
       if (tempLines.length > 0) {
         setLocalLines((prev) => [...prev, ...tempLines])
@@ -4040,7 +4073,7 @@ const SectionBlock = memo(function SectionBlock({
                       </button>
                       <span className="text-xs font-medium">{fr.group.label}</span>
                       <span className="text-[10px] text-indigo-400">
-                        ({fr.group.collapsed ? fr.memberItemKeys.length : fr.memberItemKeys.length} rows)
+                        ({fr.memberItemKeys.length} rows)
                       </span>
                       {/* Ungroup affordance */}
                       <button

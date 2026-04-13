@@ -13,7 +13,7 @@ interface ForecastRowProps {
   isComputed?: boolean
   source?: SourceType
   confidence?: number
-  onCellSave?: (periodId: string, amount: number) => void
+  onCellSave?: (periodId: string, amount: number, formula: string | null) => void
   badge?: React.ReactNode
   title?: string
   readOnlyCells?: boolean
@@ -90,7 +90,7 @@ export const ForecastRow = memo(function ForecastRow({
             isNegative={amount < 0}
             isComputed={isComputed || isSubtotal || isTotal || depth === 0 || readOnlyCells}
             lineStatus={line?.lineStatus}
-            onSave={(newAmount) => onCellSave?.(p.id, newAmount)}
+            onSave={(newAmount, formula) => onCellSave?.(p.id, newAmount, formula ?? null)}
             colIdx={colIdx}
             stickyLeft={stickyLeft}
           />

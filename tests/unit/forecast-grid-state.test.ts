@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildFlatRows, isFocusable, type RowGroup, type RowGroupMap } from '@/lib/forecast/flat-rows'
 import type { Category, ForecastLine } from '@/lib/types'
+import { mkForecastLine } from './helpers/forecast-fixtures'
 
 const categories: Category[] = [
   { id: 'inflows', parentId: null, name: 'Inflows', code: 'inflows', sectionNumber: '2', sortOrder: 200, flowDirection: 'inflow' },
@@ -21,22 +22,7 @@ function mkLine(
   source: ForecastLine['source'] = 'manual',
   counterparty: string | null = null,
 ): ForecastLine {
-  return {
-    id,
-    entityId: 'e1',
-    categoryId,
-    periodId,
-    amount,
-    confidence: 100,
-    source,
-    counterparty,
-    notes: null,
-    sourceDocumentId: null,
-    sourceRuleId: null,
-    sourcePipelineProjectId: null,
-    lineStatus: 'none',
-    formula: null,
-  }
+  return mkForecastLine({ id, entityId: 'e1', categoryId, periodId, amount, source, counterparty })
 }
 
 describe('buildFlatRows', () => {

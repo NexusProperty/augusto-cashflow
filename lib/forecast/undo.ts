@@ -96,14 +96,24 @@ export class UndoStack {
   /**
    * Push an entry back onto the undo ring WITHOUT clearing the redo stack.
    * Used after a redo replay so subsequent redo steps remain available.
+   *
+   * Intentionally identical implementation to pushUndoPreserveRedo — the
+   * different names preserve call-site intent: this variant is for after-redo
+   * replay, the other is for failure-retry. Do NOT collapse to one method
+   * without updating all call sites.
    */
   pushUndoAfterRedo(entry: UndoEntry): void { this.pushUndoInternal(entry) }
 
   /**
    * Re-push an entry onto the undo ring WITHOUT clearing the redo stack.
    * Used when an undo attempt fails transiently (e.g. `created` entry whose
-   * server round-trip hasn't resolved yet) so the user can retry once the
-   * entry is ready. Unlike `push`, this does NOT wipe pending redo entries.
+   * server round-trip hasn't resolved yet, or mid-compound-undo server error)
+   * so the user can retry once the server recovers. Unlike `push`, this does
+   * NOT wipe pending redo entries.
+   *
+   * Intentionally identical implementation to pushUndoAfterRedo — the
+   * different names preserve call-site intent: this variant is for failure
+   * retry, the other is for after-redo replay.
    */
   pushUndoPreserveRedo(entry: UndoEntry): void { this.pushUndoInternal(entry) }
 

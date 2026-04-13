@@ -374,7 +374,7 @@ class Parser {
    * For ranges, length = number of periods in the range.
    * Cross-row ranges are rejected.
    */
-  parseCellRefValues(inFuncArg: boolean): number[] {
+  private parseCellRefValues(inFuncArg: boolean): number[] {
     const ctx = this.requireContext()
 
     // @label prefix?
@@ -461,6 +461,9 @@ class Parser {
       const parts = row.itemKey.split('::')
       const rowLabel = parts.slice(1).join('::').trim().toLowerCase()
       if (rowLabel === lower) return row.itemKey
+      // NOTE: When multiple rows share the same counterparty label, the FIRST
+      // match (in flatRows order) wins. This is a known limitation — formulas
+      // referencing a non-unique label will silently resolve to the first row.
     }
     throw new FormulaError(`Unknown row: ${label}`)
   }
@@ -548,6 +551,7 @@ class Parser {
     return this.ctx
   }
 
+  /** Public by intent: called from evaluateFormula() after parsing the root expression. */
   expectEnd(): void {
     const tok = this.peek()
     if (tok.type !== 'EOF') {
@@ -601,4 +605,68 @@ export function evaluateFormula(input: string, context?: EvalContext): FormulaRe
     }
     return { ok: false, error: 'Parse error' }
   }
+}
+
+/**
+ * Collect the set of itemKeys that a formula references, WITHOUT evaluating it.
+ *
+ * Uses the same tokeniser as evaluateFormula so it stays in sync if the
+ * grammar evolves (e.g. new @ label character classes, new operators).
+ * dep-graph.ts should call this instead of its own regex scanner.
+ *
+ * Errors (unknown label, out-of-range col) are silently ignored here — the
+ * full evaluator handles them at evaluation time.
+ *
+ * @param formula     - The formula string (may start with '=' or not).
+ * @param currentItemKey - The itemKey of the row this formula belongs to
+ *                        (used for plain W<n> references with no @-prefix).
+ * @param flatRows    - All rows in the grid, for @label → itemKey resolution.
+ * @returns Array of itemKeys this formula depends on (may include currentItemKey).
+ */
+export function collectFormulaReferences(
+  formula: string,
+  currentItemKey: string,
+  flatRows: FlatRow[],
+): string[] {
+  const refs = new Set<string>()
+
+  let text = formula.trim()
+  if (text.startsWith('=')) text = text.slice(1)
+
+  const tokResult = tokenise(text)
+  if (!Array.isArray(tokResult)) return [] // tokenise error — no refs
+
+  let pendingAtLabel: string | null = null
+
+  for (const tok of tokResult) {
+    if (tok.type === 'ATREF') {
+      pendingAtLabel = tok.raw ?? null
+    } else if (tok.type === ':') {
+      // ':' separates @label from W<n> — preserve pendingAtLabel through it.
+      // Do NOT reset pendingAtLabel here.
+    } else if (tok.type === 'WCOL') {
+      if (pendingAtLabel !== null) {
+        // Resolve @label → itemKey
+        const lower = pendingAtLabel.toLowerCase()
+        for (const row of flatRows) {
+          if (row.kind !== 'item') continue
+          const parts = row.itemKey.split('::')
+          const rowLabel = parts.slice(1).join('::').trim().toLowerCase()
+          if (rowLabel === lower) {
+            refs.add(row.itemKey)
+            break
+          }
+        }
+        pendingAtLabel = null
+      } else {
+        // Plain W<n> ref — depends on the current row
+        refs.add(currentItemKey)
+      }
+    } else {
+      // Any other token clears the pending label (e.g. operator, literal)
+      pendingAtLabel = null
+    }
+  }
+
+  return Array.from(refs)
 }

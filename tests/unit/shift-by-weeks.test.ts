@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { planShift } from '@/lib/forecast/shift-by-weeks'
 import type { FlatRow } from '@/lib/forecast/flat-rows'
 import type { ForecastLine } from '@/lib/types'
+import { mkForecastLine } from './helpers/forecast-fixtures'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -9,24 +10,14 @@ function makePeriod(idx: number) {
   return { id: `period-${idx}` }
 }
 
+/** Thin wrapper — sets test-specific defaults (counterparty, notes, confirmed). */
 function makeLine(overrides: Partial<ForecastLine> = {}): ForecastLine {
-  return {
-    id: `line-${Math.random().toString(36).slice(2)}`,
-    entityId: 'entity-1',
-    categoryId: 'cat-1',
-    periodId: 'period-0',
-    amount: 100,
-    confidence: 100,
-    source: 'manual',
+  return mkForecastLine({
     counterparty: 'Acme Corp',
     notes: 'quarterly',
-    sourceDocumentId: null,
-    sourceRuleId: null,
-    sourcePipelineProjectId: null,
     lineStatus: 'confirmed',
-    formula: null,
     ...overrides,
-  }
+  })
 }
 
 /** Build an 'item' FlatRow with a map of periodId → ForecastLine. */

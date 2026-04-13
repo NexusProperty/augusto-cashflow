@@ -54,9 +54,21 @@ export interface SplitCellPlan {
 /**
  * Parse a comma-separated string of amounts.
  *
- * - Splits on `,` (optional surrounding whitespace).
- * - Each token has `$` and `,` stripped (defensive parsing of currency strings).
- * - Returns `{ ok: false }` if any token is NaN, empty, or fewer than 2 values.
+ * Separator: comma followed by ONE OR MORE whitespace characters (`, `).
+ * This unambiguously handles currency amounts containing thousands-separator
+ * commas, e.g. "$1,500, $2,500" → [1500, 2500].
+ *
+ * Ambiguous inputs with no space after the comma (e.g. "1,500,2,500") are NOT
+ * split — they produce a single token that fails the "at least two" check
+ * instead of silently producing wrong values.
+ *
+ * Steps:
+ *   1. Strip `$` globally.
+ *   2. Split on `/,\s+/` (comma + one or more whitespace) — the only separator.
+ *   3. For each token, strip all remaining `,` (thousands separators).
+ *   4. parseFloat each token.
+ *
+ * Returns `{ ok: false }` if any token is NaN, empty, or fewer than 2 values.
  */
 export function parseSplitAmounts(
   input: string,
@@ -64,31 +76,19 @@ export function parseSplitAmounts(
   const trimmed = input.trim()
   if (!trimmed) return { ok: false, error: 'Enter at least two amounts' }
 
-  // Split on commas that are followed by optional whitespace AND precede a
-  // digit or `$` — this separates amounts while preserving thousands-separator
-  // commas inside tokens like "$1,500".
-  // Strategy: split on `,\s*` but only when the preceding character is a digit
-  // or `$` and the next (non-space) character is a digit or `$`.
-  // Simpler equivalent: strip `$` first, then split on `,\s+` (comma + whitespace)
-  // to separate amounts, then strip remaining `,` (thousands separators) from each token.
+  // 1. Strip currency symbols.
   const stripped = trimmed.replace(/\$/g, '')
 
-  // Separator: comma followed by at least one whitespace character (`, `).
-  // This lets "1,500, 2,000" split into ["1,500", "2,000"].
-  // If no whitespace-separated comma exists, fall back to any comma.
-  let tokens: string[]
-  if (/,\s/.test(stripped)) {
-    tokens = stripped.split(/,\s+/)
-  } else {
-    // No whitespace after any comma — split on all commas (no thousands separators expected).
-    tokens = stripped.split(',')
-  }
+  // 2. Split ONLY on comma+whitespace. Commas NOT followed by whitespace are
+  //    treated as thousands separators and stripped per-token in step 3.
+  //    This means "1,500,2,500" (no spaces) → single token → fails length check.
+  const tokens = stripped.split(/,\s+/)
 
   if (tokens.length < 2) return { ok: false, error: 'Enter at least two amounts' }
 
   const values: number[] = []
   for (const token of tokens) {
-    // Strip remaining commas (thousands separators) and whitespace.
+    // 3. Strip remaining commas (thousands separators) and surrounding whitespace.
     const cleaned = token.trim().replace(/,/g, '')
     if (!cleaned) return { ok: false, error: 'Empty value' }
     const n = parseFloat(cleaned)

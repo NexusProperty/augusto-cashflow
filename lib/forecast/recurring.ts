@@ -42,6 +42,7 @@ export function generateRecurringLines(
       sourceRuleId: rule.id,
       sourcePipelineProjectId: null,
       lineStatus: 'confirmed',
+      formula: null,
     })
   }
   return results

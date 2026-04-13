@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { buildCsv, escapeCsvField, type ExportArgs } from '@/lib/forecast/export'
 import type { FlatRow } from '@/lib/forecast/flat-rows'
 import type { Category, ForecastLine, Period, WeekSummary } from '@/lib/types'
+import { mkForecastLine } from './helpers/forecast-fixtures'
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -32,22 +33,15 @@ function mkLine(
   amount: number,
   opts: { counterparty?: string | null; notes?: string | null } = {},
 ): ForecastLine {
-  return {
+  return mkForecastLine({
     id,
     entityId: 'e1',
     categoryId,
     periodId,
     amount,
-    confidence: 100,
-    source: 'manual',
     counterparty: opts.counterparty ?? null,
     notes: opts.notes ?? null,
-    sourceDocumentId: null,
-    sourceRuleId: null,
-    sourcePipelineProjectId: null,
-    lineStatus: 'none',
-    formula: null,
-  }
+  })
 }
 
 function mkItemRow(

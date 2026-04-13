@@ -4,7 +4,7 @@ import { requireAuth } from '@/lib/auth'
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
-import { UpdateLineAmountsSchema } from './schemas'
+import { UpdateLineAmountsSchema, AMOUNT_MIN, AMOUNT_MAX } from './schemas'
 import {
   assertEntityInScope,
   assertForecastLinesInScope,
@@ -17,10 +17,9 @@ function revalidateForecast() {
   revalidatePath('/forecast/detail')
   revalidatePath('/forecast/compare')
   revalidatePath('/forecast/overrides')
+  revalidatePath('/forecast/coachmate') // reads forecast_lines via loadForecastData
+  // Excluded: /forecast/intercompany — reads intercompany_balances, not forecast_lines
 }
-
-const AMOUNT_MIN = -1_000_000_000
-const AMOUNT_MAX = 1_000_000_000
 
 const LINE_STATUSES = [
   'none',
@@ -144,13 +143,6 @@ export async function updateLineAmounts(
   const parsed = UpdateLineAmountsSchema.safeParse(payload)
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' }
 
-  // Bounds check on amounts (schema enforces structure; explicit bounds here)
-  for (const u of parsed.data.updates) {
-    if (u.amount < AMOUNT_MIN || u.amount > AMOUNT_MAX) {
-      return { error: `Amount out of range for ${u.id}` }
-    }
-  }
-
   // Batch scope check (single query)
   const allIds = parsed.data.updates.map((u) => u.id)
   const { inScope, outOfScope } = await assertForecastLinesInScope(allIds)
@@ -185,6 +177,16 @@ export async function updateLineAmounts(
 
   // Formula path: direct table updates (formula-bearing rows are rare)
   // Each update is individual; we collect failures and return the first error.
+  //
+  // ATOMICITY GAP: If pureAmounts.length > 0, those rows were already committed
+  // by the RPC above. If a per-row formula update fails here, the DB has a mix
+  // of new amounts (from the RPC) and the failed row still at its old amount.
+  // The grid's optimistic revert will visually show pre-edit amounts for ALL
+  // rows, creating a temporary split-brain until the next reload.
+  //
+  // TODO: Extend update_forecast_line_amounts RPC to accept an optional formula
+  // column per row so the entire batch (amounts + formulas) is committed
+  // atomically. Tracked in follow-up work.
   if (withFormula.length > 0) {
     for (const u of withFormula) {
       const { error } = await supabase
@@ -308,6 +310,7 @@ export async function bulkAddForecastLines(
     sourceRuleId: (raw.source_rule_id as string | null) ?? null,
     sourcePipelineProjectId: (raw.source_pipeline_project_id as string | null) ?? null,
     lineStatus: (raw.line_status as ForecastLine['lineStatus']) ?? 'confirmed',
+    formula: (raw.formula as string | null) ?? null,
   }))
 
   return { ok: true, data: result }

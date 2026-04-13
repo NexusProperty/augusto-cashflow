@@ -8,6 +8,7 @@ import {
 } from '@/lib/forecast/find'
 import type { FlatRow } from '@/lib/forecast/flat-rows'
 import type { ForecastLine, Period } from '@/lib/types'
+import { mkForecastLine, mkPeriod } from './helpers/forecast-fixtures'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -21,30 +22,16 @@ function mkLine(
     source?: ForecastLine['source']
   } = {},
 ): ForecastLine {
-  return {
+  return mkForecastLine({
     id,
     entityId: 'e1',
     categoryId: 'cat1',
     periodId,
     amount,
-    confidence: 100,
     source: opts.source ?? 'manual',
     counterparty: opts.counterparty ?? null,
     notes: opts.notes ?? null,
-    sourceDocumentId: null,
-    sourceRuleId: null,
-    sourcePipelineProjectId: null,
-    lineStatus: 'none',
-    formula: null,
-  }
-}
-
-function mkPeriod(idx: number): Period {
-  return {
-    id: `p${idx}`,
-    weekEnding: `2026-01-0${idx + 1}`,
-    isActual: false,
-  }
+  })
 }
 
 function mkItemRow(
@@ -180,6 +167,13 @@ describe('nextMatchIndex', () => {
   it('9c. mid → mid+1', () => {
     expect(nextMatchIndex(1, 3)).toBe(2)
   })
+
+  it('9d. empty list (total=0) → 0 (documented contract: caller must guard against empty list)', () => {
+    // When total === 0 both functions return 0. Callers are responsible for
+    // checking that the match list is non-empty before using the index.
+    expect(nextMatchIndex(null, 0)).toBe(0)
+    expect(nextMatchIndex(0, 0)).toBe(0)
+  })
 })
 
 // ── prevMatchIndex ────────────────────────────────────────────────────────────
@@ -195,6 +189,11 @@ describe('prevMatchIndex', () => {
 
   it('10c. mid → mid-1', () => {
     expect(prevMatchIndex(2, 3)).toBe(1)
+  })
+
+  it('10d. empty list (total=0) → 0 (documented contract: caller must guard against empty list)', () => {
+    expect(prevMatchIndex(null, 0)).toBe(0)
+    expect(prevMatchIndex(0, 0)).toBe(0)
   })
 })
 

@@ -21,8 +21,8 @@ export interface ForecastLine {
   sourceRuleId: string | null
   sourcePipelineProjectId: string | null
   lineStatus: LineStatus
-  /** Optional formula expression (e.g. =SUM(W1:W4)). Null/undefined = plain amount. */
-  formula?: string | null
+  /** Formula expression (e.g. =SUM(W1:W4)). Null = plain amount. */
+  formula: string | null
 }
 
 export type OverrideTargetType = 'pipeline_item' | 'recurring_rule'

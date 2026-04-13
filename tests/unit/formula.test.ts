@@ -421,3 +421,63 @@ describe('evaluateFormula — cell references', () => {
     expect(r.ok).toBe(false);
   });
 });
+
+// ── D8: duplicate-label first-match-wins contract ─────────────────────────────
+
+describe('resolveRowByLabel — duplicate counterparty behaviour', () => {
+  it('when two rows share the same label, the first row in flatRows order wins', () => {
+    // Two rows both labelled "Payroll" — one with values 1000, one with values 9999.
+    // The formula should resolve to the FIRST row (payrollKey1).
+    const payrollKey1 = 'cat-1::Payroll'
+    const payrollKey2 = 'cat-2::Payroll' // duplicate label, different category
+
+    const periods = [{ id: 'p1' }, { id: 'p2' }]
+
+    const amounts: Record<string, number> = {
+      [`${payrollKey1}:p1`]: 1000,
+      [`${payrollKey2}:p1`]: 9999,
+    }
+
+    const payrollRow1: FlatRow & { kind: 'item' } = {
+      kind: 'item',
+      sectionId: 'sec-1',
+      itemKey: payrollKey1,
+      lineIds: [],
+      lineByPeriod: new Map(),
+      isPipeline: false,
+    }
+
+    const payrollRow2: FlatRow = {
+      kind: 'item',
+      sectionId: 'sec-2',
+      itemKey: payrollKey2,
+      lineIds: [],
+      lineByPeriod: new Map(),
+      isPipeline: false,
+    }
+
+    // currentRow is payrollRow1 — we use cross-row @Payroll reference from
+    // a third "Revenue" row so resolveRowByLabel scans the flatRows list.
+    const revenueKey = 'cat-3::Revenue'
+    const revenueRow: FlatRow & { kind: 'item' } = {
+      kind: 'item',
+      sectionId: 'sec-3',
+      itemKey: revenueKey,
+      lineIds: [],
+      lineByPeriod: new Map(),
+      isPipeline: false,
+    }
+
+    const ctx: EvalContext = {
+      currentRow: revenueRow,
+      // payrollRow1 comes first — first-match-wins means it should win
+      flatRows: [payrollRow1, payrollRow2, revenueRow],
+      periods,
+      getAmount: (itemKey, periodId) => amounts[`${itemKey}:${periodId}`] ?? 0,
+    }
+
+    // @Payroll:W1 should resolve to payrollKey1 (index 0), value 1000 — not payrollKey2 (value 9999)
+    const result = evaluateFormula('=@Payroll:W1', ctx)
+    expect(result).toEqual({ ok: true, value: 1000 })
+  })
+});

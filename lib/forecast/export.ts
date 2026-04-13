@@ -81,7 +81,7 @@ function subLabel(subId: string, categories: Category[]): string {
 function itemLabel(fr: FlatRow & { kind: 'item' }): string {
   // Use the first line's counterparty/notes to derive the label, mirroring
   // the `buildItemRows` key-label construction.
-  const firstLine = fr.lineByPeriod.values().next().value as ForecastLine | undefined
+  const [firstLine] = fr.lineByPeriod.values()
   if (!firstLine) return 'Line item'
   return firstLine.counterparty ?? firstLine.notes ?? 'Line item'
 }

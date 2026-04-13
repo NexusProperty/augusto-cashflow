@@ -2,27 +2,19 @@ import { describe, expect, it } from 'vitest'
 import { parseSplitAmounts, planSplitCell } from '@/lib/forecast/split-cell'
 import type { SplitCellArgs } from '@/lib/forecast/split-cell'
 import type { ForecastLine } from '@/lib/types'
+import { mkForecastLine } from './helpers/forecast-fixtures'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/** Thin wrapper — sets split-cell-specific defaults (amount 5000, confirmed). */
 function makeLine(overrides: Partial<ForecastLine> = {}): ForecastLine {
-  return {
-    id: `line-${Math.random().toString(36).slice(2)}`,
-    entityId: 'entity-1',
-    categoryId: 'cat-1',
-    periodId: 'period-0',
+  return mkForecastLine({
     amount: 5000,
-    confidence: 100,
-    source: 'manual',
     counterparty: 'Acme Corp',
     notes: 'quarterly invoice',
-    sourceDocumentId: null,
-    sourceRuleId: null,
-    sourcePipelineProjectId: null,
     lineStatus: 'confirmed',
-    formula: null,
     ...overrides,
-  }
+  })
 }
 
 function makePeriod(idx: number) {
@@ -68,6 +60,16 @@ describe('parseSplitAmounts', () => {
   it('test 5: empty string → error', () => {
     const result = parseSplitAmounts('')
     expect(result.ok).toBe(false)
+  })
+
+  it('test 6: no-space commas "1,500,2,500" → error (ambiguous — treated as single token)', () => {
+    // Without whitespace after the commas the separator rule does not fire;
+    // the entire string becomes a single token which fails the ≥2 check.
+    const result = parseSplitAmounts('1,500,2,500')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error).toBe('Enter at least two amounts')
+    }
   })
 })
 
