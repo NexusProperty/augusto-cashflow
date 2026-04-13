@@ -156,4 +156,23 @@ describe('evaluateFormula', () => {
     // step, not at overflow. Either way, should not throw.
     expect(r.ok).toBe(false);
   });
+
+  // Depth cap — pathological deeply-nested input
+  it('rejects deeply nested input without stack overflow', () => {
+    const pathological = '='.concat('-'.repeat(5000), '1');
+    const r = evaluateFormula(pathological);
+    expect(r.ok).toBe(false);
+  });
+
+  it('rejects deeply nested parenthesised input without throwing', () => {
+    const pathological = '=' + '('.repeat(500) + '1' + ')'.repeat(500);
+    const r = evaluateFormula(pathological);
+    expect(r.ok).toBe(false);
+  });
+
+  it('still allows moderate unary nesting (~10 deep)', () => {
+    const r = evaluateFormula('=' + '-'.repeat(10) + '5');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value).toBe(5); // even number of minuses
+  });
 });

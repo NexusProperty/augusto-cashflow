@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ForecastLine, Period, Category, EntityGroup, ScenarioOverride } from '@/lib/types'
 import type { RecurringRule } from '@/lib/forecast/recurring'
 
@@ -62,7 +63,7 @@ function mapScenarioOverride(row: any): ScenarioOverride {
 }
 
 export async function loadScenarioOverrides(
-  supabase: any,
+  supabase: SupabaseClient,
   scenarioId: string | null | undefined,
 ): Promise<ScenarioOverride[]> {
   if (!scenarioId) return []
@@ -90,7 +91,7 @@ function mapRecurringRule(row: any): RecurringRule {
 }
 
 export async function loadForecastData(
-  supabase: any,
+  supabase: SupabaseClient,
   groupId: string,
 ): Promise<{
   entityGroup: EntityGroup

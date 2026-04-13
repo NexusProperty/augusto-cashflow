@@ -34,12 +34,18 @@ export function buildItemRows(
   sectionLines: ForecastLine[]
   itemMap: Map<string, ForecastLine[]>
 } {
+  // O(1) category lookup instead of Array.find per line × per section.
+  const categoryById = new Map<string, Category>()
+  for (const c of categories) categoryById.set(c.id, c)
+  const childIds = new Set<string>(sectionChildren.map((sc) => sc.id))
+
   const sectionLines = lines.filter((l) => {
-    const cat = categories.find((c) => c.id === l.categoryId)
+    const cat = categoryById.get(l.categoryId)
     if (!cat) return false
     return (
       cat.parentId === section.id ||
-      sectionChildren.some((sc) => sc.id === cat.parentId || sc.id === cat.id)
+      (cat.parentId !== null && childIds.has(cat.parentId)) ||
+      childIds.has(cat.id)
     )
   })
 
@@ -80,7 +86,8 @@ export function buildFlatRows(
         sub.id,
         ...categories.filter((c) => c.parentId === sub.id).map((c) => c.id),
       ]
-      const subLines = lines.filter((l) => subCategoryIds.includes(l.categoryId))
+      const subCategoryIdSet = new Set(subCategoryIds)
+      const subLines = lines.filter((l) => subCategoryIdSet.has(l.categoryId))
       const editable = subLines.some((l) => l.source !== 'pipeline')
       rows.push({
         kind: 'subtotal',

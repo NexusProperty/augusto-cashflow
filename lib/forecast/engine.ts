@@ -81,19 +81,19 @@ export function applyScenarioOverrides(
   return { lines: result, overriddenIds, confidenceOverriddenIds }
 }
 
-function getFlowDirection(categoryId: string, categories: Category[]): string {
-  const cat = categories.find((c) => c.id === categoryId)
+function getFlowDirection(categoryId: string, categoryMap: Map<string, Category>): string {
+  const cat = categoryMap.get(categoryId)
   if (!cat) return 'inflow'
   if (cat.flowDirection && cat.flowDirection !== 'computed') return cat.flowDirection
-  if (cat.parentId) return getFlowDirection(cat.parentId, categories)
+  if (cat.parentId) return getFlowDirection(cat.parentId, categoryMap)
   return 'inflow'
 }
 
-function isLoansCategory(categoryId: string, categories: Category[]): boolean {
-  const cat = categories.find((c) => c.id === categoryId)
+function isLoansCategory(categoryId: string, categoryMap: Map<string, Category>): boolean {
+  const cat = categoryMap.get(categoryId)
   if (!cat) return false
   if (cat.code === 'loans') return true
-  if (cat.parentId) return isLoansCategory(cat.parentId, categories)
+  if (cat.parentId) return isLoansCategory(cat.parentId, categoryMap)
   return false
 }
 
@@ -107,6 +107,10 @@ export function computeWeekSummaries(
   const sorted = [...periods].sort(
     (a, b) => new Date(a.weekEnding).getTime() - new Date(b.weekEnding).getTime()
   )
+
+  // Index categories once instead of Array.find per line × per period.
+  const categoryMap = new Map<string, Category>()
+  for (const c of categories) categoryMap.set(c.id, c)
 
   const linesByPeriod = new Map<string, ForecastLine[]>()
   for (const line of lines) {
@@ -127,7 +131,7 @@ export function computeWeekSummaries(
     let loansAndFinancing = 0
 
     for (const line of periodLines) {
-      const direction = getFlowDirection(line.categoryId, categories)
+      const direction = getFlowDirection(line.categoryId, categoryMap)
       const amount = weighted ? applyConfidenceWeighting(line.amount, line.confidence) : line.amount
 
       switch (direction) {
@@ -138,7 +142,7 @@ export function computeWeekSummaries(
           totalInflows += amount
           break
         case 'outflow':
-          if (isLoansCategory(line.categoryId, categories)) {
+          if (isLoansCategory(line.categoryId, categoryMap)) {
             loansAndFinancing += amount
           } else {
             totalOutflows += amount
@@ -148,7 +152,7 @@ export function computeWeekSummaries(
     }
 
     const hasOpeningLines = periodLines.some(
-      (l) => getFlowDirection(l.categoryId, categories) === 'balance'
+      (l) => getFlowDirection(l.categoryId, categoryMap) === 'balance'
     )
     if (!hasOpeningLines && summaries.length > 0) {
       openingBalance = previousClosing

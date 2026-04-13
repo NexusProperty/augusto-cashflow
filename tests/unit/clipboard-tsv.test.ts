@@ -153,3 +153,24 @@ describe('round-trip (toTSV → parseTSV → parseClipboardNumber)', () => {
     expect(numeric).toEqual([[-100, 0, 1234.56]])
   })
 })
+
+describe('parseTSV size caps', () => {
+  it('caps rows at MAX_TSV_ROWS (500)', () => {
+    const huge = Array.from({ length: 5000 }, (_, i) => `${i}`).join('\n')
+    const parsed = parseTSV(huge)
+    expect(parsed.length).toBeLessThanOrEqual(500)
+  })
+
+  it('caps columns at MAX_TSV_COLS (100) per row', () => {
+    const row = Array.from({ length: 1000 }, (_, i) => `${i}`).join('\t')
+    const parsed = parseTSV(row)
+    expect(parsed).toHaveLength(1)
+    expect(parsed[0]!.length).toBeLessThanOrEqual(100)
+  })
+
+  it('does not crash on very large input', () => {
+    const megaRow = Array.from({ length: 10000 }, () => 'x').join('\t')
+    const mega = Array.from({ length: 2000 }, () => megaRow).join('\n')
+    expect(() => parseTSV(mega)).not.toThrow()
+  })
+})

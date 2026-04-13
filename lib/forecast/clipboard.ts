@@ -37,10 +37,23 @@ export function toTSV(rows: Array<Array<number | null>>): string {
  * - Empty input → `[]`.
  * - No trimming of individual cell contents.
  */
+/**
+ * Upper bounds on what parseTSV will return. The forecast grid is at most
+ * ~200 item rows × 52 weeks, so these caps give generous headroom while
+ * bounding memory on pathological paste input (e.g. a crafted clipboard
+ * with 100k tokens).
+ */
+export const MAX_TSV_ROWS = 500
+export const MAX_TSV_COLS = 100
+
 export function parseTSV(input: string): string[][] {
   if (input === '') return []
   const lines = input.split(/\r?\n/)
-  const rows = lines.map((line) => line.split('\t'))
+  const capped = lines.length > MAX_TSV_ROWS ? lines.slice(0, MAX_TSV_ROWS) : lines
+  const rows = capped.map((line) => {
+    const cells = line.split('\t')
+    return cells.length > MAX_TSV_COLS ? cells.slice(0, MAX_TSV_COLS) : cells
+  })
   // Drop trailing all-empty row (e.g. trailing newline from Excel).
   if (rows.length > 0) {
     const last = rows[rows.length - 1]!

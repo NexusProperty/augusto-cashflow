@@ -78,8 +78,11 @@ function tokenise(input: string): Token[] | { error: string } {
   return tokens;
 }
 
+const MAX_DEPTH = 100;
+
 class Parser {
   private pos = 0;
+  private depth = 0;
   constructor(private tokens: Token[]) {}
 
   private peek(): Token {
@@ -121,6 +124,18 @@ class Parser {
 
   // factor := NUMBER | '(' expr ')' | '-' factor | '+' factor
   private parseFactor(): number {
+    this.depth++;
+    if (this.depth > MAX_DEPTH) {
+      throw new FormulaError('Expression too deeply nested');
+    }
+    try {
+      return this.parseFactorInner();
+    } finally {
+      this.depth--;
+    }
+  }
+
+  private parseFactorInner(): number {
     const tok = this.peek();
 
     if (tok.type === '-') {
