@@ -3,7 +3,8 @@ import { Dashboard } from '@/components/forecast/dashboard'
 import { loadForecastData, loadScenarioOverrides } from '@/lib/forecast/queries'
 import { computeWeekSummaries, applyScenarioOverrides } from '@/lib/forecast/engine'
 import { generateRecurringLines } from '@/lib/forecast/recurring'
-import { AUGUSTO_GROUP_ID } from '@/lib/types'
+import { AUGUSTO_GROUP_ID, type BankAccount } from '@/lib/types'
+import { MAIN_FORECAST_BANK_NAMES } from '@/lib/forecast/constants'
 
 export default async function ForecastPage({
   searchParams,
@@ -27,12 +28,33 @@ export default async function ForecastPage({
   const overrides = await loadScenarioOverrides(supabase, params.scenario)
   const { lines: allLines } = applyScenarioOverrides(baseLines, overrides, data.periods)
 
+  // Per-bank mode: matches /forecast/detail so group totals + opening balances
+  // stay consistent across the two views.
+  const { data: rawBankAccounts } = await supabase
+    .from('bank_accounts')
+    .select('id, entity_id, name, account_type, account_number, od_limit, opening_balance, is_active, notes')
+    .in('name', [...MAIN_FORECAST_BANK_NAMES])
+    .eq('is_active', true)
+
+  const bankAccounts: BankAccount[] = (rawBankAccounts ?? []).map((b: any) => ({
+    id: String(b.id),
+    entityId: String(b.entity_id ?? ''),
+    name: String(b.name ?? ''),
+    accountType: (b.account_type as string | null) ?? null,
+    accountNumber: (b.account_number as string | null) ?? null,
+    odLimit: Number(b.od_limit) || 0,
+    openingBalance: Number(b.opening_balance) || 0,
+    isActive: b.is_active ?? true,
+    notes: (b.notes as string | null) ?? null,
+  }))
+
   const summaries = computeWeekSummaries(
     data.periods,
     allLines,
     data.categories,
     data.entityGroup?.odFacilityLimit ?? 0,
     weighted,
+    bankAccounts,
   )
 
   const pipelineLines = allLines.filter((l) => l.confidence < 100 && l.amount > 0)
