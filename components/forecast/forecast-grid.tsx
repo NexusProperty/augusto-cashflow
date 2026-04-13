@@ -16,6 +16,7 @@ import {
   toRange,
   type Selection,
 } from '@/lib/forecast/selection'
+import { toTSV, parseTSV, parseClipboardNumber } from '@/lib/forecast/clipboard'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
 import type { ForecastLine, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
@@ -264,7 +265,91 @@ export function ForecastGrid({
     return () => document.removeEventListener('mousedown', onDocMouseDown)
   }, [])
 
-  // Container keydown: Shift+arrow extends; Escape clears.
+  // Build a 2D grid of numeric values for a selection range.
+  const buildCopyGrid = useCallback(
+    (r: { rowStart: number; rowEnd: number; colStart: number; colEnd: number }): Array<Array<number | null>> => {
+      const out: Array<Array<number | null>> = []
+      for (let row = r.rowStart; row <= r.rowEnd; row++) {
+        const rowArr: Array<number | null> = []
+        const fr = flatRows[row]
+        for (let col = r.colStart; col <= r.colEnd; col++) {
+          const period = periods[col]
+          if (!fr || fr.kind !== 'item' || !period) {
+            rowArr.push(null)
+            continue
+          }
+          const line = fr.lineByPeriod.get(period.id)
+          rowArr.push(line ? line.amount : null)
+        }
+        out.push(rowArr)
+      }
+      return out
+    },
+    [flatRows, periods],
+  )
+
+  // Apply a parsed clipboard grid starting at (rowStart, colStart) of the
+  // current selection. Returns summary counts.
+  const applyPasteGrid = useCallback(
+    (grid: string[][], rowStart: number, colStart: number) => {
+      const updates: Array<{ id: string; amount: number }> = []
+      let skippedPipeline = 0
+      let skippedNonNumeric = 0
+      let skippedNoLine = 0
+      let skippedOutOfBounds = 0
+      let skippedNonItem = 0
+
+      for (let dr = 0; dr < grid.length; dr++) {
+        const targetRow = rowStart + dr
+        if (targetRow >= flatRows.length) {
+          skippedOutOfBounds += grid[dr]!.length
+          continue
+        }
+        const fr = flatRows[targetRow]!
+        const row = grid[dr]!
+        for (let dc = 0; dc < row.length; dc++) {
+          const targetCol = colStart + dc
+          if (targetCol >= periods.length) {
+            skippedOutOfBounds++
+            continue
+          }
+          if (fr.kind !== 'item') {
+            skippedNonItem++
+            continue
+          }
+          const period = periods[targetCol]!
+          const line = fr.lineByPeriod.get(period.id)
+          if (!line) {
+            skippedNoLine++
+            continue
+          }
+          if (line.source === 'pipeline' || fr.isPipeline) {
+            skippedPipeline++
+            continue
+          }
+          const raw = row[dc] ?? ''
+          const parsed = parseClipboardNumber(raw)
+          if (parsed === null) {
+            skippedNonNumeric++
+            continue
+          }
+          updates.push({ id: line.id, amount: parsed })
+        }
+      }
+
+      if (updates.length > 0) saveUpdates(updates)
+
+      console.log(
+        `Pasted ${updates.length} cells, skipped ${skippedPipeline} pipeline, skipped ${skippedNonNumeric} non-numeric` +
+          (skippedNoLine + skippedOutOfBounds + skippedNonItem > 0
+            ? ` (+${skippedNoLine} no-line, +${skippedOutOfBounds} out-of-bounds, +${skippedNonItem} non-item)`
+            : ''),
+      )
+    },
+    [flatRows, periods, saveUpdates],
+  )
+
+  // Container keydown: Shift+arrow extends; Escape clears; Ctrl/Cmd+C/V copies/pastes.
   const handleGridKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -274,6 +359,59 @@ export function ForecastGrid({
         }
         return
       }
+
+      // ── Clipboard: Ctrl/Cmd+C / Ctrl/Cmd+V ────────────────────────────────
+      const mod = e.ctrlKey || e.metaKey
+      if (mod && (e.key === 'c' || e.key === 'C' || e.key === 'v' || e.key === 'V')) {
+        // If focus is inside an editing <input>, let the input handle it natively.
+        const active = document.activeElement
+        if (active && active.tagName === 'INPUT') return
+
+        // Need the Clipboard API.
+        if (typeof navigator === 'undefined' || !navigator.clipboard) {
+          console.warn('Clipboard API not available')
+          return
+        }
+
+        if (e.key === 'c' || e.key === 'C') {
+          if (!selection || !range) return
+          const grid = buildCopyGrid(range)
+          const tsv = toTSV(grid)
+          e.preventDefault()
+          navigator.clipboard.writeText(tsv).then(
+            () => {
+              const rows = grid.length
+              const cols = grid[0]?.length ?? 0
+              console.log(`Copied ${rows}x${cols}`)
+            },
+            (err) => {
+              console.warn('Clipboard writeText rejected:', err)
+            },
+          )
+          return
+        }
+
+        // Paste
+        if (!selection || !range) return
+        e.preventDefault()
+        const originRow = range.rowStart
+        const originCol = range.colStart
+        navigator.clipboard.readText().then(
+          (text) => {
+            const grid = parseTSV(text)
+            if (grid.length === 0) {
+              console.log('Pasted 0 cells (empty clipboard)')
+              return
+            }
+            applyPasteGrid(grid, originRow, originCol)
+          },
+          (err) => {
+            console.warn('Clipboard readText rejected:', err)
+          },
+        )
+        return
+      }
+
       if (!e.shiftKey) return
       if (!selection) return
       // Only act on Shift+Arrow; Shift+Tab etc is handled by the cell itself.
@@ -294,7 +432,7 @@ export function ForecastGrid({
       setSelection((prev) => (prev ? extendByArrow(prev, dir, rowMax, colMax, isFocusableRow) : prev))
       e.preventDefault()
     },
-    [selection, flatRows.length, periods.length, isFocusableRow],
+    [selection, range, flatRows.length, periods.length, isFocusableRow, buildCopyGrid, applyPasteGrid],
   )
 
   // ── Subtotal proration handler ────────────────────────────────────────────
