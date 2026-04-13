@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { __test__ } from '@/app/(app)/forecast/overrides/actions'
-
-const { CreateSchema, UpdateSchema, rowFromParsed } = __test__
+import {
+  CreateScenarioOverrideSchema as CreateSchema,
+  UpdateScenarioOverrideSchema as UpdateSchema,
+  rowFromParsed,
+} from '@/app/(app)/forecast/overrides/schemas'
 
 const SCENARIO = '11111111-1111-1111-1111-111111111111'
 const TARGET = '22222222-2222-2222-2222-222222222222'
