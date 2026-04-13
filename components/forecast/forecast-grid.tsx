@@ -36,6 +36,7 @@ import { toTSV, parseTSV, parseClipboardNumber } from '@/lib/forecast/clipboard'
 import { computeFillHandleRange, isInFillRange, detectPattern, materialisePattern } from '@/lib/forecast/fill-handle'
 import { planShift } from '@/lib/forecast/shift-by-weeks'
 import { buildMatchList, nextMatchIndex, prevMatchIndex, type FindMatch } from '@/lib/forecast/find'
+import { buildCsv } from '@/lib/forecast/export'
 import { FindBar } from './find-bar'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
 import type { ForecastLine, LineStatus, Period, Category, WeekSummary } from '@/lib/types'
@@ -1669,6 +1670,65 @@ export function ForecastGrid({
     return () => document.removeEventListener('keydown', onKey)
   }, [shiftPopoverOpen])
 
+  // ── Export button + menu ──────────────────────────────────────────────────
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const exportButtonRef = useRef<HTMLButtonElement>(null)
+  const exportMenuRef = useRef<HTMLDivElement>(null)
+
+  // Close export menu when clicking outside.
+  useEffect(() => {
+    if (!exportMenuOpen) return
+    const onDocClick = (e: MouseEvent) => {
+      if (
+        exportButtonRef.current?.contains(e.target as Node) ||
+        exportMenuRef.current?.contains(e.target as Node)
+      ) {
+        return
+      }
+      setExportMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [exportMenuOpen])
+
+  // Close export menu on Escape.
+  useEffect(() => {
+    if (!exportMenuOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExportMenuOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [exportMenuOpen])
+
+  const triggerExport = useCallback(
+    (scope: 'all' | 'view' | 'selection') => {
+      setExportMenuOpen(false)
+      const csv = buildCsv({
+        flatRows,
+        periods,
+        localLines,
+        categories,
+        summaries,
+        scope,
+        hideEmpty,
+        collapsed,
+        filterRowSet,
+        selectedCellKeys,
+      })
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `augusto-cashflow-${scope}-${new Date().toISOString().slice(0, 10)}.csv`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    },
+    [flatRows, periods, localLines, categories, summaries, hideEmpty, collapsed, filterRowSet, selectedCellKeys],
+  )
+
   /**
    * Execute a shift of N periods on the current selection.
    *
@@ -2128,6 +2188,44 @@ export function ForecastGrid({
             onChange={setFreezeCount}
             disabled={isNarrowScreen}
           />
+          {/* Export button + dropdown menu */}
+          <div className="relative">
+            <button
+              ref={exportButtonRef}
+              onClick={() => setExportMenuOpen((prev) => !prev)}
+              title="Export forecast data as CSV"
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 shadow-sm hover:bg-zinc-50 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            >
+              Export
+            </button>
+            {exportMenuOpen && (
+              <div
+                ref={exportMenuRef}
+                className="absolute right-0 top-full z-30 mt-1 w-44 rounded-lg border border-zinc-200 bg-white py-1 shadow-lg"
+              >
+                <button
+                  disabled={!hasAnySelection}
+                  onClick={() => triggerExport('selection')}
+                  title={!hasAnySelection ? 'Select one or more cells first' : 'Export selected cells only'}
+                  className="w-full px-3 py-1.5 text-left text-xs text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:text-zinc-400"
+                >
+                  Export selection
+                </button>
+                <button
+                  onClick={() => triggerExport('view')}
+                  className="w-full px-3 py-1.5 text-left text-xs text-zinc-700 hover:bg-zinc-50"
+                >
+                  Export current view
+                </button>
+                <button
+                  onClick={() => triggerExport('all')}
+                  className="w-full px-3 py-1.5 text-left text-xs text-zinc-700 hover:bg-zinc-50"
+                >
+                  Export entire forecast
+                </button>
+              </div>
+            )}
+          </div>
           {/* Shift… button + inline popover */}
           <div className="relative">
             <button
