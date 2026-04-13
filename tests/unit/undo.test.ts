@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { UndoStack, entryReplayable, groupByPrevStatus } from '@/lib/forecast/undo'
-import type { UndoEntry } from '@/lib/forecast/undo'
+import type { AtomicUndoEntry, UndoEntry } from '@/lib/forecast/undo'
 import type { LineStatus } from '@/lib/types'
 
 function makeAmounts(n: number, scenarioId: string | null = null): UndoEntry {
@@ -315,5 +315,201 @@ describe('entryReplayable — scenario mismatch predicate', () => {
     const createdEntry = makeCreated('temp-1', null)
     expect(entryReplayable(createdEntry, null)).toBe(true)
     expect(entryReplayable(createdEntry, 'scenario-A')).toBe(false)
+  })
+})
+
+// ── Compound undo entry ───────────────────────────────────────────────────────
+
+describe('UndoStack — compound entry push/undo/redo', () => {
+  it('push a compound entry → undo pops it and the returned value has kind: compound', () => {
+    const stack = new UndoStack()
+
+    const amountsSub: AtomicUndoEntry = {
+      kind: 'amounts',
+      forward: [{ id: 'line-1', amount: 0 }],
+      inverse: [{ id: 'line-1', amount: 500 }],
+      label: 'source clear',
+      scenarioId: null,
+    }
+    const createdSub: AtomicUndoEntry = {
+      kind: 'created',
+      tempId: 'temp-abc',
+      realId: 'real-xyz',
+      label: '(inside shift)',
+      scenarioId: null,
+    }
+
+    const compound: UndoEntry = {
+      kind: 'compound',
+      entries: [amountsSub, createdSub],
+      label: 'Shift → 1 week',
+      scenarioId: null,
+    }
+
+    stack.push(compound)
+    expect(stack.size).toBe(1)
+
+    const popped = stack.undo()
+    expect(popped).not.toBeNull()
+    expect(popped?.kind).toBe('compound')
+    if (popped?.kind === 'compound') {
+      expect(popped.entries).toHaveLength(2)
+      expect(popped.entries[0]?.kind).toBe('amounts')
+      expect(popped.entries[1]?.kind).toBe('created')
+    }
+    expect(stack.size).toBe(0)
+  })
+
+  it('undo then pushRedo → redo returns the compound entry', () => {
+    const stack = new UndoStack()
+
+    const atomicSub: AtomicUndoEntry = makeAmounts(1) as AtomicUndoEntry
+    const compound: UndoEntry = {
+      kind: 'compound',
+      entries: [atomicSub],
+      label: 'Shift',
+      scenarioId: null,
+    }
+
+    stack.push(compound)
+    const popped = stack.undo()
+    expect(popped).not.toBeNull()
+    stack.pushRedo(popped!)
+
+    expect(stack.redoSize).toBe(1)
+    const redone = stack.redo()
+    expect(redone?.kind).toBe('compound')
+    expect(stack.redoSize).toBe(0)
+  })
+
+  it('compound entry survives the ring eviction check (pushed once, popped once)', () => {
+    const stack = new UndoStack()
+    const atomicSub: AtomicUndoEntry = makeAmounts(5) as AtomicUndoEntry
+    const compound: UndoEntry = {
+      kind: 'compound',
+      entries: [atomicSub],
+      label: 'Compound',
+      scenarioId: 'scenario-X',
+    }
+    stack.push(compound)
+    expect(stack.peek()?.kind).toBe('compound')
+  })
+})
+
+describe('entryReplayable — compound entries', () => {
+  it('returns true when compound scenarioId matches current (both null)', () => {
+    const compound: UndoEntry = {
+      kind: 'compound',
+      entries: [makeAmounts(1, null) as AtomicUndoEntry],
+      label: 'Shift',
+      scenarioId: null,
+    }
+    expect(entryReplayable(compound, null)).toBe(true)
+  })
+
+  it('returns true when compound scenarioId matches current (uuid)', () => {
+    const compound: UndoEntry = {
+      kind: 'compound',
+      entries: [makeAmounts(1, 'scenario-A') as AtomicUndoEntry],
+      label: 'Shift',
+      scenarioId: 'scenario-A',
+    }
+    expect(entryReplayable(compound, 'scenario-A')).toBe(true)
+  })
+
+  it('returns false when compound scenarioId does not match (null vs uuid)', () => {
+    const compound: UndoEntry = {
+      kind: 'compound',
+      entries: [makeAmounts(1, null) as AtomicUndoEntry],
+      label: 'Shift',
+      scenarioId: null,
+    }
+    expect(entryReplayable(compound, 'scenario-A')).toBe(false)
+  })
+
+  it('compound replayability is determined by the compound own scenarioId regardless of sub-entries', () => {
+    // Compound says scenario-A; sub-entry says null. Compound wins.
+    const compound: UndoEntry = {
+      kind: 'compound',
+      entries: [makeAmounts(1, null) as AtomicUndoEntry], // sub-entry has null scenarioId
+      label: 'Shift',
+      scenarioId: 'scenario-A',
+    }
+    expect(entryReplayable(compound, 'scenario-A')).toBe(true)
+    expect(entryReplayable(compound, null)).toBe(false)
+  })
+})
+
+describe('UndoStack — patchRealId inside compound', () => {
+  it('patchRealId finds a created sub-entry inside a compound and updates its realId', () => {
+    const stack = new UndoStack()
+
+    const compound: UndoEntry = {
+      kind: 'compound',
+      entries: [
+        {
+          kind: 'amounts',
+          forward: [{ id: 'l1', amount: 0 }],
+          inverse: [{ id: 'l1', amount: 100 }],
+          label: 'clear',
+          scenarioId: null,
+        },
+        {
+          kind: 'created',
+          tempId: 'temp-shift-1',
+          realId: null,
+          label: '(inside shift)',
+          scenarioId: null,
+        },
+      ],
+      label: 'Shift',
+      scenarioId: null,
+    }
+
+    stack.push(compound)
+    stack.patchRealId('temp-shift-1', 'real-db-id-99')
+
+    const top = stack.peek()
+    expect(top?.kind).toBe('compound')
+    if (top?.kind === 'compound') {
+      const sub = top.entries[1]!
+      expect(sub.kind).toBe('created')
+      if (sub.kind === 'created') {
+        expect(sub.realId).toBe('real-db-id-99')
+      }
+    }
+  })
+})
+
+describe('UndoStack — removeTempEntry inside compound', () => {
+  it('removeTempEntry removes a created sub-entry from within a compound', () => {
+    const stack = new UndoStack()
+
+    const compound: UndoEntry = {
+      kind: 'compound',
+      entries: [
+        makeAmounts(1) as AtomicUndoEntry,
+        {
+          kind: 'created',
+          tempId: 'temp-to-remove',
+          realId: null,
+          label: '(inside shift)',
+          scenarioId: null,
+        },
+      ],
+      label: 'Shift',
+      scenarioId: null,
+    }
+
+    stack.push(compound)
+    stack.removeTempEntry('temp-to-remove')
+
+    const top = stack.peek()
+    expect(top?.kind).toBe('compound')
+    if (top?.kind === 'compound') {
+      // The created sub-entry should be gone; amounts sub-entry remains.
+      expect(top.entries).toHaveLength(1)
+      expect(top.entries[0]?.kind).toBe('amounts')
+    }
   })
 })

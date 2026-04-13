@@ -15,7 +15,7 @@ import {
   UndoStack,
   entryReplayable,
   groupByPrevStatus,
-  type UndoEntry,
+  type AtomicUndoEntry,
   type AmountUpdate,
 } from '@/lib/forecast/undo'
 import { computeAggregates, type Aggregates } from '@/lib/forecast/aggregates'
@@ -33,6 +33,7 @@ import {
 } from '@/lib/forecast/selection'
 import { toTSV, parseTSV, parseClipboardNumber } from '@/lib/forecast/clipboard'
 import { computeFillHandleRange, isInFillRange, detectPattern, materialisePattern } from '@/lib/forecast/fill-handle'
+import { planShift } from '@/lib/forecast/shift-by-weeks'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
 import type { ForecastLine, LineStatus, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
@@ -122,6 +123,12 @@ export function ForecastGrid({
   // ── Undo / Redo ───────────────────────────────────────────────────────────
   const undoStackRef = useRef(new UndoStack())
   const isReplayingRef = useRef(false)
+
+  // Stable ref to handleShift — allows handleGridKeyDown (defined before handleShift)
+  // to call it without a forward-reference TS error. Updated in the handleShift callback.
+  const handleShiftRef = useRef<(n: number, opts: { autoConfirm: boolean }) => Promise<void>>(
+    async () => { /* noop until handleShift is defined below */ },
+  )
   const localLinesRef = useRef(localLines)
   useEffect(() => { localLinesRef.current = localLines }, [localLines])
 
@@ -881,6 +888,68 @@ export function ForecastGrid({
           return
         }
         setLocalLines((cur) => [...cur, ...result.data])
+      } else if (entry.kind === 'compound') {
+        // Delegate to each sub-entry's existing replay path in order.
+        // isReplayingRef is already true so sub-entry replays won't push
+        // new entries onto the stack.
+        //
+        // We also build a transformed `entries` array for the redo compound:
+        // `created` sub-entries are converted to `deleted` sub-entries (Option A)
+        // so that replayRedo's `deleted` branch can re-create lines via
+        // bulkAddForecastLines. This mirrors the standalone `created` case above.
+        const createdSnapshots = new Map<string, AtomicUndoEntry & { kind: 'deleted' }>()
+
+        for (const sub of entry.entries) {
+          if (sub.kind === 'amounts') {
+            saveUpdates(sub.inverse)
+          } else if (sub.kind === 'created') {
+            if (sub.realId === null) {
+              markError('Wait — save in flight')
+              undoStackRef.current.pushUndoPreserveRedo(entry)
+              return
+            }
+            const lineSnapshot = localLinesRef.current.find((l) => l.id === sub.realId) ?? null
+            const res = await deleteForecastLine(sub.realId)
+            if (res && 'error' in res) {
+              markError(res.error ?? 'Delete failed')
+              return
+            }
+            setLocalLines((cur) => cur.filter((l) => l.id !== sub.realId))
+            // Store the snapshot keyed by tempId so we can convert this
+            // sub-entry to `deleted` when building the redo compound below.
+            if (lineSnapshot) {
+              createdSnapshots.set(sub.tempId, {
+                kind: 'deleted',
+                lines: [lineSnapshot],
+                label: sub.label,
+                scenarioId: sub.scenarioId,
+              })
+            }
+          } else if (sub.kind === 'deleted') {
+            const result = await bulkAddForecastLines(sub.lines)
+            if ('error' in result) {
+              markError(result.error)
+              return
+            }
+            setLocalLines((cur) => [...cur, ...result.data])
+          }
+          // 'status' sub-entries are not produced by shift but supported for completeness;
+          // they require async batches — skip for now (compound is only used for shift).
+        }
+
+        // Build the transformed compound for the redo stack: swap each `created`
+        // sub-entry that has a captured snapshot to its corresponding `deleted`
+        // sub-entry. All other sub-entries pass through unchanged.
+        const redoEntries = entry.entries.map((sub): AtomicUndoEntry => {
+          if (sub.kind === 'created') {
+            const converted = createdSnapshots.get(sub.tempId)
+            if (converted) return converted
+          }
+          return sub
+        })
+        undoStackRef.current.pushRedo({ ...entry, entries: redoEntries })
+        markUndone()
+        return // already pushed redo above; skip generic pushRedo below
       }
       undoStackRef.current.pushRedo(entry)
       markUndone()
@@ -934,6 +1003,79 @@ export function ForecastGrid({
         }
         const idsToRemove = new Set(entry.lines.map((l) => l.id))
         setLocalLines((cur) => cur.filter((l) => !idsToRemove.has(l.id)))
+      } else if (entry.kind === 'compound') {
+        // Replay forward: each sub-entry's redo path, in order.
+        //
+        // Symmetry with replayUndo's compound branch (Option A):
+        // When a `deleted` sub-entry is re-created via bulkAddForecastLines,
+        // we convert it back to a `created` sub-entry (using the new realId
+        // returned by the server) on the compound that goes back onto the undo
+        // stack. This keeps undo→redo→undo→redo cycles idempotent.
+        const deletedToCreated = new Map<string, AtomicUndoEntry & { kind: 'created' }>()
+
+        for (const sub of entry.entries) {
+          if (sub.kind === 'amounts') {
+            saveUpdates(sub.forward)
+          } else if (sub.kind === 'created') {
+            // `created` sub-entries on the redo stack are no-ops — they were
+            // converted to `deleted` during undo (Option A), so re-create is
+            // handled by the `deleted` sub-entry. Legacy entries silently pass.
+          } else if (sub.kind === 'deleted') {
+            const result = await bulkAddForecastLines(sub.lines)
+            if ('error' in result) {
+              markError(result.error)
+              return
+            }
+            // Guard against partial server success: if we got fewer rows back
+            // than requested, the redo is incomplete — do not push a partial
+            // compound onto the undo stack as it would diverge state on the
+            // next Ctrl+Z.
+            if (result.data.length !== sub.lines.length) {
+              markError('Re-create returned incomplete data')
+              return
+            }
+            setLocalLines((cur) => [...cur, ...result.data])
+            // Convert back to `created` sub-entry for the undo stack using a
+            // stable (entityId, categoryId, periodId) keyed lookup so that
+            // server re-ordering does not corrupt the mapping.
+            const reByKey = new Map<string, ForecastLine>()
+            for (const row of result.data) {
+              reByKey.set(`${row.entityId}|${row.categoryId}|${row.periodId}`, row)
+            }
+            if (sub.lines.length > 0) {
+              const originalLine = sub.lines[0]!
+              const reKey = `${originalLine.entityId}|${originalLine.categoryId}|${originalLine.periodId}`
+              const newLine = reByKey.get(reKey) ?? result.data[0]
+              if (newLine) {
+                deletedToCreated.set(originalLine.id, {
+                  kind: 'created',
+                  // tempId is not recoverable; use the new realId as a stable key.
+                  // The undo stack only needs tempId to patch future server responses,
+                  // which won't happen for these already-settled entries.
+                  tempId: newLine.id,
+                  realId: newLine.id,
+                  label: sub.label,
+                  scenarioId: sub.scenarioId,
+                })
+              }
+            }
+          }
+        }
+
+        // Build transformed compound for undo stack: swap each `deleted` sub-entry
+        // that was re-created back to a `created` sub-entry so the next undo can
+        // delete it again (via the standard `created` undo path).
+        const undoEntries = entry.entries.map((sub): AtomicUndoEntry => {
+          if (sub.kind === 'deleted' && sub.lines.length > 0) {
+            const originalLine = sub.lines[0]!
+            const converted = deletedToCreated.get(originalLine.id)
+            if (converted) return converted
+          }
+          return sub
+        })
+        undoStackRef.current.pushUndoAfterRedo({ ...entry, entries: undoEntries })
+        markRedone()
+        return
       }
       undoStackRef.current.pushUndoAfterRedo(entry)
       markRedone()
@@ -1033,6 +1175,16 @@ export function ForecastGrid({
             }
           },
         )
+        return
+      }
+
+      // ── Alt+←/→: shift selected cells by ±1 week (auto-confirm, no prompt) ──
+      if (e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        const activeEl = document.activeElement
+        if (activeEl && activeEl.tagName === 'INPUT') return
+        e.preventDefault()
+        const shiftDir = e.key === 'ArrowRight' ? 1 : -1
+        void handleShiftRef.current(shiftDir, { autoConfirm: true })
         return
       }
 
@@ -1199,6 +1351,246 @@ export function ForecastGrid({
     [selectedCellKeys, flatRows, periods, startTransition, markError, markSaved, scenarioId],
   )
 
+  // ── Shift-by-N-weeks ─────────────────────────────────────────────────────
+
+  // Popover state for the "Shift…" button.
+  const [shiftPopoverOpen, setShiftPopoverOpen] = useState(false)
+  const [shiftN, setShiftN] = useState(1)
+  const shiftButtonRef = useRef<HTMLButtonElement>(null)
+  const shiftPopoverRef = useRef<HTMLDivElement>(null)
+
+  // Close the popover when clicking outside.
+  useEffect(() => {
+    if (!shiftPopoverOpen) return
+    const onDocClick = (e: MouseEvent) => {
+      if (
+        shiftButtonRef.current?.contains(e.target as Node) ||
+        shiftPopoverRef.current?.contains(e.target as Node)
+      ) {
+        return
+      }
+      setShiftPopoverOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [shiftPopoverOpen])
+
+  // Close on Escape.
+  useEffect(() => {
+    if (!shiftPopoverOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShiftPopoverOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [shiftPopoverOpen])
+
+  /**
+   * Execute a shift of N periods on the current selection.
+   *
+   * When `autoConfirm` is false (button Apply path) the caller should already
+   * have surfaced the collision warning. When `autoConfirm` is true (keyboard
+   * path) collisions are accepted silently (Excel behaviour).
+   *
+   * Push is deferred until `bulkAddForecastLines` resolves so we have real IDs
+   * for the created sub-entries. During the round-trip the undo button is
+   * briefly unavailable for this operation — acceptable, same as `saveUpdates`.
+   */
+  const handleShift = useCallback(
+    async (n: number, { autoConfirm }: { autoConfirm: boolean }) => {
+      if (n === 0) return
+
+      const plan = planShift(selectedCellKeys, n, flatRows, periods)
+
+      if (plan.updates.length === 0 && plan.creates.length === 0) return
+
+      if (!autoConfirm && plan.collisions > 0) {
+        // The popover already shows the collision count; apply was explicitly clicked.
+        // We proceed — caller guarantees user saw the warning.
+      }
+
+      // ── Optimistic local update ─────────────────────────────────────────
+
+      // 1. Apply all amount updates immediately (source clears + target overwrites).
+      const oldAmounts = plan.updates.map((u) => ({
+        id: u.id,
+        amount: snapshotRef.current.get(u.id) ?? 0,
+      }))
+      for (const u of plan.updates) snapshotRef.current.set(u.id, u.amount)
+      if (plan.updates.length > 0) applyLocal(plan.updates)
+
+      // 2. Insert optimistic temp lines for creates.
+      const tempLines: ForecastLine[] = plan.creates.map((c) => ({
+        id: c.tempId,
+        entityId: c.entityId,
+        categoryId: c.categoryId,
+        periodId: c.periodId,
+        amount: c.amount,
+        confidence: 100,
+        source: 'manual' as const,
+        counterparty: c.counterparty,
+        notes: c.notes,
+        sourceDocumentId: null,
+        sourceRuleId: null,
+        sourcePipelineProjectId: null,
+        lineStatus: c.lineStatus,
+      }))
+      if (tempLines.length > 0) {
+        setLocalLines((prev) => [...prev, ...tempLines])
+      }
+
+      // ── Server calls ────────────────────────────────────────────────────
+
+      startTransition(() => {
+        const doShift = async () => {
+          // Run both calls; updates can start immediately.
+          const [updateResult, createResult] = await Promise.all([
+            plan.updates.length > 0
+              ? updateLineAmounts({ updates: plan.updates })
+              : Promise.resolve({ ok: true as const, count: 0 }),
+            plan.creates.length > 0
+              ? bulkAddForecastLines(
+                  plan.creates.map((c) => ({
+                    entityId: c.entityId,
+                    categoryId: c.categoryId,
+                    periodId: c.periodId,
+                    amount: c.amount,
+                    counterparty: c.counterparty,
+                    notes: c.notes,
+                    lineStatus: c.lineStatus,
+                    source: 'manual',
+                    confidence: 100,
+                  })),
+                )
+              : Promise.resolve({ ok: true as const, data: [] as ForecastLine[] }),
+          ])
+
+          // ── Error handling ──────────────────────────────────────────────
+          if ('error' in updateResult) {
+            // Revert optimistic amount updates.
+            applyLocal(oldAmounts)
+            for (const o of oldAmounts) snapshotRef.current.set(o.id, o.amount)
+            // Revert optimistic temp lines.
+            if (tempLines.length > 0) {
+              const tempIds = new Set(tempLines.map((l) => l.id))
+              setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
+            }
+            markError(updateResult.error ?? 'Shift failed')
+            return
+          }
+
+          if ('error' in createResult) {
+            // Partial failure: amount updates went through, creates failed.
+            // Revert only the temp lines; keep the amount updates (they're
+            // already persisted). A full rollback of amounts would require
+            // another round-trip which adds complexity for a rare edge case.
+            if (tempLines.length > 0) {
+              const tempIds = new Set(tempLines.map((l) => l.id))
+              setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
+            }
+            // Push a partial undo entry so the user can Ctrl+Z the amount
+            // updates that did succeed, even though the creates never happened.
+            if (!isReplayingRef.current && plan.updates.length > 0) {
+              const partialAmountsSub: AtomicUndoEntry = {
+                kind: 'amounts',
+                forward: plan.updates,
+                inverse: oldAmounts,
+                label: 'shift amounts (partial)',
+                scenarioId,
+              }
+              undoStackRef.current.push({
+                kind: 'compound',
+                entries: [partialAmountsSub],
+                label: `Shift ${n > 0 ? '+' : ''}${n}w (partial)`,
+                scenarioId,
+              })
+            }
+            markError('Shift partially failed — amounts saved, new lines not created')
+            return
+          }
+
+          // ── Success ──────────────────────────────────────────────────
+          const createdLines = 'data' in createResult ? createResult.data : []
+
+          // Build a stable lookup by (entityId, categoryId, periodId) so that
+          // server re-ordering never assigns a realId to the wrong temp entry.
+          const responseByKey = new Map<string, ForecastLine>()
+          for (const row of createdLines) {
+            responseByKey.set(`${row.entityId}|${row.categoryId}|${row.periodId}`, row)
+          }
+
+          // Swap temp ids for real ids.
+          if (createdLines.length > 0) {
+            const realByTempId = new Map<string, ForecastLine>()
+            for (const c of plan.creates) {
+              const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
+              const real = responseByKey.get(key)
+              if (real) realByTempId.set(c.tempId, real)
+            }
+            setLocalLines((prev) =>
+              prev.map((l) => {
+                const real = realByTempId.get(l.id)
+                return real ?? l
+              }),
+            )
+            for (const real of createdLines) {
+              if (real) snapshotRef.current.set(real.id, real.amount)
+            }
+          }
+
+          // ── Build and push compound undo entry ─────────────────────
+          if (!isReplayingRef.current) {
+            // amounts sub-entry: forward = updates (source clears + target overwrites),
+            //                    inverse = old values (pre-shift).
+            const amountsSub: AtomicUndoEntry = {
+              kind: 'amounts',
+              forward: plan.updates,
+              inverse: oldAmounts,
+              label: 'shift amounts',
+              scenarioId,
+            }
+
+            // Per-line created sub-entries (one per new line, with real id now known).
+            const createdSubs: AtomicUndoEntry[] = plan.creates
+              .map((c) => {
+                const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
+                const real = responseByKey.get(key)
+                if (!real) return null
+                return {
+                  kind: 'created' as const,
+                  tempId: c.tempId,
+                  realId: real.id,
+                  label: '(inside shift)',
+                  scenarioId,
+                }
+              })
+              .filter((s): s is NonNullable<typeof s> => s !== null)
+
+            const subEntries: AtomicUndoEntry[] = [
+              amountsSub,
+              ...createdSubs,
+            ]
+
+            undoStackRef.current.push({
+              kind: 'compound',
+              entries: subEntries,
+              label: `Shift ${n > 0 ? '+' : ''}${n} week${Math.abs(n) === 1 ? '' : 's'} (${plan.updates.length + plan.creates.length} cell${plan.updates.length + plan.creates.length === 1 ? '' : 's'})`,
+              scenarioId,
+            })
+          }
+
+          markSaved()
+        }
+
+        void doShift()
+      })
+    },
+    [selectedCellKeys, flatRows, periods, applyLocal, startTransition, markError, markSaved, scenarioId],
+  )
+  // Keep the ref in sync so handleGridKeyDown (defined earlier) always calls
+  // the latest closure of handleShift without needing it in its own deps array.
+  useEffect(() => { handleShiftRef.current = handleShift }, [handleShift])
+
   // ── Hidden rows count (footer) ────────────────────────────────────────────
 
   const totalHiddenCount = useMemo(() => {
@@ -1253,6 +1645,78 @@ export function ForecastGrid({
             onPick={handleSetStatus}
             selectedCount={selectedCellKeys.size}
           />
+          {/* Shift… button + inline popover */}
+          <div className="relative">
+            <button
+              ref={shiftButtonRef}
+              disabled={!hasAnySelection || isPending}
+              onClick={() => setShiftPopoverOpen((prev) => !prev)}
+              title={
+                !hasAnySelection
+                  ? 'Select one or more cells first'
+                  : `Shift selection by N weeks`
+              }
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 shadow-sm hover:bg-zinc-50 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:text-zinc-400"
+            >
+              Shift…
+            </button>
+            {shiftPopoverOpen && (() => {
+              // Compute plan preview to show collision warning.
+              const previewPlan = planShift(selectedCellKeys, shiftN, flatRows, periods)
+              const shiftLabel = shiftN > 0
+                ? `Shift forward ${shiftN} week${shiftN === 1 ? '' : 's'}`
+                : `Shift backward ${Math.abs(shiftN)} week${Math.abs(shiftN) === 1 ? '' : 's'}`
+              const nothingToShift = previewPlan.updates.length === 0 && previewPlan.creates.length === 0
+
+              return (
+                <div
+                  ref={shiftPopoverRef}
+                  className="absolute right-0 top-full z-30 mt-1 w-64 rounded-lg border border-zinc-200 bg-white p-3 shadow-lg"
+                >
+                  <p className="mb-2 text-xs font-medium text-zinc-700">Shift selection by N weeks</p>
+                  <div className="mb-2 flex items-center gap-2">
+                    <label className="text-xs text-zinc-500">Weeks:</label>
+                    <input
+                      type="number"
+                      value={shiftN}
+                      min="-104"
+                      max="104"
+                      step="1"
+                      onChange={(e) => setShiftN(Number(e.target.value))}
+                      className="w-20 rounded border border-zinc-300 px-1.5 py-0.5 text-xs text-zinc-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <p className="mb-2 text-xs text-zinc-500">{shiftLabel}</p>
+                  {previewPlan.collisions > 0 && (
+                    <p className="mb-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-700 ring-1 ring-inset ring-amber-200">
+                      {previewPlan.collisions} target cell{previewPlan.collisions === 1 ? '' : 's'} will be overwritten.
+                    </p>
+                  )}
+                  {nothingToShift && (
+                    <p className="mb-2 text-xs text-zinc-400">Nothing to shift in the selection.</p>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      disabled={nothingToShift || shiftN === 0}
+                      onClick={() => {
+                        setShiftPopoverOpen(false)
+                        void handleShift(shiftN, { autoConfirm: true })
+                      }}
+                      className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-300"
+                    >
+                      Apply
+                    </button>
+                    <button
+                      onClick={() => setShiftPopoverOpen(false)}
+                      className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
           <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-500 select-none">
             <input
               type="checkbox"

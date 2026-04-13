@@ -10,7 +10,8 @@ export interface AmountUpdate {
   amount: number
 }
 
-export type UndoEntry =
+/** Atomic (non-compound) undo entry — the primitives that compound entries wrap. */
+export type AtomicUndoEntry =
   | {
       kind: 'amounts'
       forward: AmountUpdate[]
@@ -36,6 +37,29 @@ export type UndoEntry =
   | {
       kind: 'deleted'
       lines: ForecastLine[]
+      label: string
+      scenarioId: string | null
+    }
+
+export type UndoEntry =
+  | AtomicUndoEntry
+  | {
+      /**
+       * A compound entry that groups 1+ atomic sub-entries into a single
+       * logical undo/redo unit (e.g. a shift-by-N-weeks operation).
+       *
+       * Rules:
+       *  - Nested `compound` entries inside `entries` are FORBIDDEN.
+       *    Callers must ensure all sub-entries are atomic kinds.
+       *  - Each sub-entry's `scenarioId` must equal this compound's `scenarioId`
+       *    at construction time.
+       *  - On undo/redo replay, the grid walks `entries` in order for both
+       *    undo and redo, delegating to each sub-entry's existing replay path.
+       *    The `isReplayingRef` guard prevents sub-entries from pushing new
+       *    stack entries during replay.
+       */
+      kind: 'compound'
+      entries: AtomicUndoEntry[]
       label: string
       scenarioId: string | null
     }
@@ -84,6 +108,7 @@ export class UndoStack {
   /**
    * Patch the `realId` on the most-recent `created` entry that matches
    * `tempId`. Called after the server responds with the real DB id.
+   * Also searches inside `compound` sub-entries.
    */
   patchRealId(tempId: string, realId: string): void {
     for (let i = this.undoRing.length - 1; i >= 0; i--) {
@@ -92,18 +117,44 @@ export class UndoStack {
         this.undoRing[i] = { ...e, realId }
         return
       }
+      if (e.kind === 'compound') {
+        for (let j = e.entries.length - 1; j >= 0; j--) {
+          const sub = e.entries[j]!
+          if (sub.kind === 'created' && sub.tempId === tempId) {
+            const newEntries = [...e.entries]
+            newEntries[j] = { ...sub, realId }
+            this.undoRing[i] = { ...e, entries: newEntries }
+            return
+          }
+        }
+      }
     }
   }
 
   /**
    * Remove a `created` entry by tempId. Called when the server create fails
    * so we don't leave a dangling entry on the stack.
+   * Also searches inside `compound` sub-entries.
    */
   removeTempEntry(tempId: string): void {
-    const idx = this.undoRing.findLastIndex(
-      (e) => e.kind === 'created' && e.tempId === tempId,
-    )
-    if (idx !== -1) this.undoRing.splice(idx, 1)
+    for (let i = this.undoRing.length - 1; i >= 0; i--) {
+      const e = this.undoRing[i]!
+      if (e.kind === 'created' && e.tempId === tempId) {
+        this.undoRing.splice(i, 1)
+        return
+      }
+      if (e.kind === 'compound') {
+        const subIdx = e.entries.findLastIndex(
+          (sub) => sub.kind === 'created' && sub.tempId === tempId,
+        )
+        if (subIdx !== -1) {
+          const newEntries = [...e.entries]
+          newEntries.splice(subIdx, 1)
+          this.undoRing[i] = { ...e, entries: newEntries }
+          return
+        }
+      }
+    }
   }
 
   /**
