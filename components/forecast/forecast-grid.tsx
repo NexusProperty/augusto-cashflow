@@ -8,6 +8,14 @@ import { updateLineAmounts } from '@/app/(app)/forecast/actions'
 import { computeWeekSummaries } from '@/lib/forecast/engine'
 import { prorateSubtotal } from '@/lib/forecast/proration'
 import { buildFlatRows, buildItemRows, isFocusable, type FlatRow } from '@/lib/forecast/flat-rows'
+import {
+  collapseTo,
+  extendByArrow,
+  extendSelection,
+  isInRange,
+  toRange,
+  type Selection,
+} from '@/lib/forecast/selection'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
 import type { ForecastLine, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
@@ -162,32 +170,131 @@ export function ForecastGrid({
     [sections, categories, localLines, collapsed],
   )
 
-  // Focus coordinates live in (flatRowIndex, periodIndex) space.
-  const [focus, setFocus] = useState<{ row: number; col: number } | null>(null)
+  // Selection state in (flatRowIndex, periodIndex) space. Single-cell selection
+  // has anchor === focus; multi-cell has anchor at origin and focus at active.
+  const [selection, setSelection] = useState<Selection | null>(null)
+  const focus = selection?.focus ?? null
+
+  // Derive the rectangular range for highlighting.
+  const range = useMemo(() => (selection ? toRange(selection) : null), [selection])
+
+  const isFocusableRow = useCallback(
+    (row: number) => isFocusable(flatRows[row]),
+    [flatRows],
+  )
 
   const moveFocus = useCallback(
     (fromRow: number, fromCol: number, direction: Direction) => {
       const colMax = periods.length - 1
       if (colMax < 0) return
-      if (direction === 'left' || direction === 'right') {
-        let col = fromCol + (direction === 'right' ? 1 : -1)
-        col = Math.max(0, Math.min(colMax, col))
-        setFocus({ row: fromRow, col })
+      const rowMax = flatRows.length - 1
+      // Plain arrow — collapse to single cell then step. We use extendByArrow
+      // against a collapsed selection to get edge/row-skip behaviour for free.
+      const base = collapseTo({ row: fromRow, col: fromCol })
+      const next = extendByArrow(base, direction, rowMax, colMax, isFocusableRow)
+      setSelection(collapseTo(next.focus))
+    },
+    [flatRows.length, periods.length, isFocusableRow],
+  )
+
+  // ── Multi-cell selection: mouse drag + Shift+arrow extend ────────────────
+  const isDraggingRef = useRef(false)
+
+  // Extract {row, col} from a DOM event targeting a cell with data-row/col.
+  const cellFromEvent = useCallback((target: EventTarget | null): { row: number; col: number } | null => {
+    if (!(target instanceof Element)) return null
+    const td = target.closest('td[data-row]') as HTMLElement | null
+    if (!td) return null
+    const row = Number(td.dataset.row)
+    const col = Number(td.dataset.col)
+    if (!Number.isFinite(row) || !Number.isFinite(col)) return null
+    return { row, col }
+  }, [])
+
+  const handleGridMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      const cell = cellFromEvent(e.target)
+      if (!cell) return
+      if (e.shiftKey && selection) {
+        // Extend current selection without starting a drag.
+        setSelection((prev) => (prev ? extendSelection(prev, cell) : collapseTo(cell)))
+        e.preventDefault()
         return
       }
-      // up / down — find next focusable row
-      const step = direction === 'down' ? 1 : -1
-      let r = fromRow + step
-      while (r >= 0 && r < flatRows.length) {
-        if (isFocusable(flatRows[r])) {
-          setFocus({ row: r, col: fromCol })
-          return
-        }
-        r += step
-      }
-      // No move if none found
+      // Begin a fresh drag-selection.
+      setSelection(collapseTo(cell))
+      isDraggingRef.current = true
     },
-    [flatRows, periods.length],
+    [cellFromEvent, selection],
+  )
+
+  // Global listeners for drag-in-progress (mousemove extends, mouseup ends).
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!isDraggingRef.current) return
+      const cell = cellFromEvent(e.target)
+      if (!cell) return
+      setSelection((prev) => {
+        if (!prev) return collapseTo(cell)
+        if (prev.focus.row === cell.row && prev.focus.col === cell.col) return prev
+        return extendSelection(prev, cell)
+      })
+    }
+    const onUp = () => {
+      isDraggingRef.current = false
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [cellFromEvent])
+
+  // Click outside the grid clears the selection.
+  const gridRootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (!gridRootRef.current) return
+      if (e.target instanceof Node && !gridRootRef.current.contains(e.target)) {
+        setSelection(null)
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [])
+
+  // Container keydown: Shift+arrow extends; Escape clears.
+  const handleGridKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (selection) {
+          setSelection(null)
+          e.preventDefault()
+        }
+        return
+      }
+      if (!e.shiftKey) return
+      if (!selection) return
+      // Only act on Shift+Arrow; Shift+Tab etc is handled by the cell itself.
+      const dir: Direction | null =
+        e.key === 'ArrowUp' ? 'up'
+          : e.key === 'ArrowDown' ? 'down'
+            : e.key === 'ArrowLeft' ? 'left'
+              : e.key === 'ArrowRight' ? 'right'
+                : null
+      if (!dir) return
+      // If the active element is an <input> we're editing — let InlineCell handle it.
+      const active = document.activeElement
+      if (active && active.tagName === 'INPUT') return
+
+      const rowMax = flatRows.length - 1
+      const colMax = periods.length - 1
+      if (rowMax < 0 || colMax < 0) return
+      setSelection((prev) => (prev ? extendByArrow(prev, dir, rowMax, colMax, isFocusableRow) : prev))
+      e.preventDefault()
+    },
+    [selection, flatRows.length, periods.length, isFocusableRow],
   )
 
   // ── Subtotal proration handler ────────────────────────────────────────────
@@ -226,8 +333,10 @@ export function ForecastGrid({
     }, 0)
   }, [hideEmpty, sections, categories, localLines])
 
+  const anchor = selection?.anchor ?? null
+
   return (
-    <div>
+    <div ref={gridRootRef} onMouseDown={handleGridMouseDown} onKeyDown={handleGridKeyDown}>
       {/* Controls bar */}
       <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-500">
@@ -288,6 +397,8 @@ export function ForecastGrid({
                 lines={localLines}
                 flatRows={flatRows}
                 focus={focus}
+                range={range}
+                anchor={anchor}
                 onCellSave={handleCellSave}
                 onCellClear={handleCellClear}
                 onSubtotalSave={handleSubtotalSave}
@@ -432,6 +543,8 @@ const SectionBlock = memo(function SectionBlock({
   lines,
   flatRows,
   focus,
+  range,
+  anchor,
   onCellSave,
   onCellClear,
   onSubtotalSave,
@@ -448,6 +561,8 @@ const SectionBlock = memo(function SectionBlock({
   lines: ForecastLine[]
   flatRows: FlatRow[]
   focus: { row: number; col: number } | null
+  range: { rowStart: number; rowEnd: number; colStart: number; colEnd: number } | null
+  anchor: { row: number; col: number } | null
   onCellSave: (lineId: string, amount: number) => void
   onCellClear: (lineId: string) => void
   onSubtotalSave: (subCategoryIds: string[], periodId: string, newTotal: number) => void
@@ -598,6 +713,8 @@ const SectionBlock = memo(function SectionBlock({
                         onSave={() => {}}
                         onMoveFocus={(dir) => onMoveFocus(flatIdx, colIdx, dir)}
                         isFocused={isFocusedCell}
+                        rowIdx={flatIdx}
+                        colIdx={colIdx}
                       />
                     )
                   }
@@ -610,6 +727,8 @@ const SectionBlock = memo(function SectionBlock({
                       onSave={(newTotal) => onSubtotalSave(subCategoryIds, p.id, newTotal)}
                       onMoveFocus={(dir) => onMoveFocus(flatIdx, colIdx, dir)}
                       isFocused={isFocusedCell}
+                      rowIdx={flatIdx}
+                      colIdx={colIdx}
                     />
                   )
                 })}
@@ -696,6 +815,8 @@ const SectionBlock = memo(function SectionBlock({
                   const amount = cellLine?.amount ?? 0
                   const isFocusedCell =
                     focus !== null && focus.row === flatIdx && focus.col === colIdx
+                  const inRange = range ? isInRange(range, flatIdx, colIdx) : false
+                  const isAnchor = anchor !== null && anchor.row === flatIdx && anchor.col === colIdx
                   return (
                     <InlineCell
                       key={p.id}
@@ -717,6 +838,10 @@ const SectionBlock = memo(function SectionBlock({
                         }
                       }}
                       isFocused={isFocusedCell}
+                      rowIdx={flatIdx}
+                      colIdx={colIdx}
+                      inSelectionRange={inRange}
+                      isAnchor={isAnchor}
                     />
                   )
                 })}

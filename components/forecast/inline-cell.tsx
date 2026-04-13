@@ -52,6 +52,14 @@ interface InlineCellProps {
   onMoveFocus?: (direction: Direction) => void
   onClear?: () => void
   isFocused?: boolean
+  /** Row index in `flatRows` — emitted as `data-row` for selection tracking. */
+  rowIdx?: number
+  /** Col index in `periods` — emitted as `data-col` for selection tracking. */
+  colIdx?: number
+  /** True when this cell is part of the current multi-cell selection range. */
+  inSelectionRange?: boolean
+  /** True when this cell is the selection anchor (first clicked / origin). */
+  isAnchor?: boolean
 }
 
 export const InlineCell = memo(function InlineCell({
@@ -64,6 +72,10 @@ export const InlineCell = memo(function InlineCell({
   onMoveFocus,
   onClear,
   isFocused,
+  rowIdx,
+  colIdx,
+  inSelectionRange,
+  isAnchor,
 }: InlineCellProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -104,9 +116,12 @@ export const InlineCell = memo(function InlineCell({
       <td
         ref={cellRef}
         tabIndex={0}
+        data-row={rowIdx}
+        data-col={colIdx}
         className={cn(
           'px-2.5 py-1.5 text-right text-sm tabular-nums outline-none',
           isNegative && 'text-red-600',
+          inSelectionRange && !isFocused && (isAnchor ? 'bg-indigo-100' : 'bg-indigo-50'),
           isFocused && 'ring-2 ring-indigo-500',
           className,
         )}
@@ -126,7 +141,7 @@ export const InlineCell = memo(function InlineCell({
 
   if (editing) {
     return (
-      <td className={cn('px-1 py-1', className)}>
+      <td data-row={rowIdx} data-col={colIdx} className={cn('px-1 py-1', className)}>
         <input
           ref={inputRef}
           type="text"
@@ -181,11 +196,14 @@ export const InlineCell = memo(function InlineCell({
     <td
       ref={cellRef}
       tabIndex={0}
+      data-row={rowIdx}
+      data-col={colIdx}
       className={cn(
         'cursor-text px-2.5 py-1.5 text-right text-sm tabular-nums outline-none',
         statusBg,
         isNegative && 'text-red-600',
         value === 0 && 'text-zinc-400',
+        inSelectionRange && !isFocused && (isAnchor ? 'bg-indigo-100' : 'bg-indigo-50'),
         isFocused && 'ring-2 ring-indigo-500',
         className,
       )}
