@@ -94,6 +94,7 @@ function isRowAllZeros(
   lines: ForecastLine[],
 ): boolean {
   if (fr.kind === 'sectionHeader') return false
+  if (fr.kind === 'group') return false  // group headers always emit
   if (fr.kind === 'subtotal') {
     return periodIds.every(
       (pid) => computeSubtotal(fr.subCategoryIds, pid, lines) === 0,
@@ -200,6 +201,10 @@ export function buildCsv(args: ExportArgs): string {
       periodValues = activePeriods.map((p) =>
         computeSubtotal(fr.subCategoryIds, p.id, localLines),
       )
+    } else if (fr.kind === 'group') {
+      // Group header: emit label + empty period values (member rows follow).
+      label = `  [Group] ${fr.group.label}`
+      periodValues = activePeriods.map(() => '')
     } else {
       // item
       label = itemLabel(fr)

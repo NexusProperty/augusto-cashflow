@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildFlatRows, isFocusable } from '@/lib/forecast/flat-rows'
+import { buildFlatRows, isFocusable, type RowGroup, type RowGroupMap } from '@/lib/forecast/flat-rows'
 import type { Category, ForecastLine } from '@/lib/types'
 
 const categories: Category[] = [
@@ -172,5 +172,147 @@ describe('buildFlatRows', () => {
       expect(mixed.isPipeline).toBe(false)
       expect(isFocusable(mixed)).toBe(true)
     }
+  })
+})
+
+// ── P3.4 Row grouping ─────────────────────────────────────────────────────────
+
+describe('buildFlatRows — P3.4 row grouping', () => {
+  const lines = [
+    mkLine('l1', 'inflows_ar', 'p1', 1000, 'manual', 'Acme'),
+    mkLine('l2', 'inflows_ar', 'p1', 2000, 'manual', 'Beta'),
+    mkLine('l3', 'outflows_payroll', 'p1', -500, 'manual', 'Payroll Run'),
+  ]
+
+  it('with no groups → output is identical to pre-P3.4 behaviour', () => {
+    const withoutGroups = buildFlatRows(sections, categories, lines, {})
+    const withEmptyGroups = buildFlatRows(sections, categories, lines, {}, {})
+
+    expect(withEmptyGroups.map((r) => r.kind)).toEqual(withoutGroups.map((r) => r.kind))
+    // Item keys are the same set
+    const itemKeysWithout = withoutGroups.filter((r) => r.kind === 'item').map((r) => r.kind === 'item' ? r.itemKey : '')
+    const itemKeysWith = withEmptyGroups.filter((r) => r.kind === 'item').map((r) => r.kind === 'item' ? r.itemKey : '')
+    expect(itemKeysWith).toEqual(itemKeysWithout)
+  })
+
+  it('inserts a group-header row of kind "group" above member item rows', () => {
+    const groups: RowGroupMap = {
+      inflows_ar: [
+        {
+          id: 'g1',
+          label: 'Key Clients',
+          lineIds: ['l1', 'l2'],
+          collapsed: false,
+        },
+      ],
+    }
+
+    const rows = buildFlatRows(sections, categories, lines, {}, groups)
+    const kinds = rows.map((r) => r.kind)
+
+    // Expect: sectionHeader, subtotal, group, item, item, sectionHeader, subtotal, item
+    expect(kinds).toContain('group')
+    const groupIdx = kinds.indexOf('group')
+    expect(kinds[groupIdx]).toBe('group')
+
+    // group row should carry the correct label and memberItemKeys
+    const groupRow = rows[groupIdx]
+    expect(groupRow?.kind).toBe('group')
+    if (groupRow?.kind === 'group') {
+      expect(groupRow.group.label).toBe('Key Clients')
+      expect(groupRow.memberItemKeys).toHaveLength(2)
+    }
+
+    // The two member item rows follow the group header
+    expect(kinds[groupIdx + 1]).toBe('item')
+    expect(kinds[groupIdx + 2]).toBe('item')
+  })
+
+  it('collapsed group → member rows absent from flatRows', () => {
+    const groups: RowGroupMap = {
+      inflows_ar: [
+        {
+          id: 'g1',
+          label: 'Key Clients',
+          lineIds: ['l1', 'l2'],
+          collapsed: true,
+        },
+      ],
+    }
+
+    const rows = buildFlatRows(sections, categories, lines, {}, groups)
+    const kinds = rows.map((r) => r.kind)
+
+    // Group header is present
+    expect(kinds).toContain('group')
+
+    // No item rows for the collapsed group's members
+    const itemRows = rows.filter((r) => r.kind === 'item' && r.sectionId === 'inflows')
+    expect(itemRows).toHaveLength(0)
+
+    // Outflows item is still present (different section)
+    const outflowItems = rows.filter((r) => r.kind === 'item' && r.sectionId === 'outflows')
+    expect(outflowItems).toHaveLength(1)
+  })
+
+  it('group containing a non-existent lineId → that lineId is silently ignored', () => {
+    const groups: RowGroupMap = {
+      inflows_ar: [
+        {
+          id: 'g1',
+          label: 'Key Clients',
+          lineIds: ['l1', 'DOES_NOT_EXIST', 'l2'],
+          collapsed: false,
+        },
+      ],
+    }
+
+    const rows = buildFlatRows(sections, categories, lines, {}, groups)
+    const groupRow = rows.find((r) => r.kind === 'group')
+    expect(groupRow?.kind).toBe('group')
+    if (groupRow?.kind === 'group') {
+      // Only 2 valid member keys (l1 → Acme, l2 → Beta); DOES_NOT_EXIST ignored
+      expect(groupRow.memberItemKeys).toHaveLength(2)
+    }
+
+    // No crashes — just the 2 valid item rows follow
+    const inflows_items = rows.filter((r) => r.kind === 'item' && r.sectionId === 'inflows')
+    expect(inflows_items).toHaveLength(2)
+  })
+
+  it('isFocusable({kind:"group", ...}) → false', () => {
+    const fakeGroupRow = {
+      kind: 'group' as const,
+      sectionId: 's',
+      subId: 'sub',
+      group: { id: 'g1', label: 'Test', lineIds: [], collapsed: false } satisfies RowGroup,
+      memberItemKeys: [],
+    }
+    expect(isFocusable(fakeGroupRow)).toBe(false)
+  })
+
+  it('ungrouped items appear after all group rows for their sub-category', () => {
+    // l1 in group, l2 NOT in group — l2 should appear as a normal item after the group.
+    const groups: RowGroupMap = {
+      inflows_ar: [
+        {
+          id: 'g1',
+          label: 'Only Acme',
+          lineIds: ['l1'],
+          collapsed: false,
+        },
+      ],
+    }
+
+    const rows = buildFlatRows(sections, categories, lines, {}, groups)
+    const groupIdx = rows.findIndex((r) => r.kind === 'group')
+    expect(groupIdx).toBeGreaterThanOrEqual(0)
+
+    // After the group header: first item is Acme (inside group), second is Beta (ungrouped)
+    const inflowItems = rows.filter((r) => r.kind === 'item' && r.sectionId === 'inflows')
+    expect(inflowItems).toHaveLength(2)
+    // Beta should still appear
+    const betaRow = inflowItems.find((r) => r.kind === 'item' && r.itemKey.includes('Beta'))
+    expect(betaRow).toBeDefined()
   })
 })

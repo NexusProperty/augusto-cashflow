@@ -21,7 +21,7 @@ import {
 import { computeAggregates, type Aggregates } from '@/lib/forecast/aggregates'
 import { computeWeekSummaries } from '@/lib/forecast/engine'
 import { prorateSubtotal } from '@/lib/forecast/proration'
-import { buildFlatRows, buildItemRows, isFocusable, type FlatRow } from '@/lib/forecast/flat-rows'
+import { buildFlatRows, buildItemRows, isFocusable, type FlatRow, type RowGroup, type RowGroupMap } from '@/lib/forecast/flat-rows'
 import {
   collapseTo,
   extendByArrow,
@@ -110,6 +110,36 @@ function FreezePicker({
       <option value="2">Freeze: 2 weeks</option>
     </select>
   )
+}
+
+// ── Row-grouping hook (P3.4) ──────────────────────────────────────────────────
+// Persists user-defined row groups to localStorage['forecast.groups.v1'].
+// SSR-safe: all localStorage access guarded by typeof window check.
+const GROUPS_STORAGE_KEY = 'forecast.groups.v1'
+
+function useGroups(): [RowGroupMap, (updater: (prev: RowGroupMap) => RowGroupMap) => void] {
+  const [groups, setGroupsState] = useState<RowGroupMap>(() => {
+    if (typeof window === 'undefined') return {}
+    try {
+      const raw = window.localStorage.getItem(GROUPS_STORAGE_KEY)
+      if (!raw) return {}
+      const parsed: unknown = JSON.parse(raw)
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {}
+      return parsed as RowGroupMap
+    } catch {
+      return {}
+    }
+  })
+
+  const setGroups = useCallback((updater: (prev: RowGroupMap) => RowGroupMap) => {
+    setGroupsState((prev) => {
+      const next = updater(prev)
+      try { window.localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(next)) } catch { /* storage full */ }
+      return next
+    })
+  }, [])
+
+  return [groups, setGroups]
 }
 
 // ── SplitCellModal ────────────────────────────────────────────────────────────
@@ -278,6 +308,9 @@ export function ForecastGrid({
 
   // ── Freeze columns ────────────────────────────────────────────────────────
   const [freezeCount, setFreezeCount, isNarrowScreen] = useFreezeCount()
+
+  // ── Row groups (P3.4) ─────────────────────────────────────────────────────
+  const [groups, setGroups] = useGroups()
 
   // ── Save status indicator (Saving / Saved / Undone / Redone / Error) ────────
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'undone' | 'redone' | 'error'>('idle')
@@ -788,8 +821,8 @@ export function ForecastGrid({
   // ── Flat rows for focus navigation ────────────────────────────────────────
 
   const flatRows = useMemo(
-    () => buildFlatRows(sections, categories, localLines, collapsed),
-    [sections, categories, localLines, collapsed],
+    () => buildFlatRows(sections, categories, localLines, collapsed, groups),
+    [sections, categories, localLines, collapsed, groups],
   )
 
   // ── Formula dependency graph ───────────────────────────────────────────────
@@ -1815,6 +1848,72 @@ export function ForecastGrid({
 
   const hasAnySelection = selectedCellKeys.size > 0
 
+  // ── P3.4: derived grouping eligibility ───────────────────────────────────
+  // "Group" is enabled when ≥2 distinct item rows are selected and all of
+  // them share the same sub-category (subId). We derive this from the flat
+  // rows referenced by the current selection.
+  const groupCandidates = useMemo((): {
+    canGroup: boolean
+    subId: string | null
+    itemRowIndices: number[]
+    /** All line IDs that appear in the selected item rows. */
+    lineIds: string[]
+    /** Categories object for the shared sub-category. */
+    subCategory: Category | null
+  } => {
+    const itemRowIndices = new Set<number>()
+    for (const key of selectedCellKeys) {
+      const row = Number(key.split(':')[0])
+      const fr = flatRows[row]
+      if (fr?.kind === 'item' && !fr.isPipeline) {
+        itemRowIndices.add(row)
+      }
+    }
+    if (itemRowIndices.size < 2) {
+      return { canGroup: false, subId: null, itemRowIndices: [], lineIds: [], subCategory: null }
+    }
+    // Check all selected item rows share the same subId.
+    // subId is the first sub-category that contains the item's categoryId.
+    const subIds = new Set<string>()
+    const lineIds: string[] = []
+    for (const rowIdx of itemRowIndices) {
+      const fr = flatRows[rowIdx]
+      if (fr?.kind !== 'item') continue
+      lineIds.push(...fr.lineIds)
+      // Find which sub-category owns this item's first line's categoryId.
+      const firstLineId = fr.lineIds[0]
+      const firstLine = localLines.find((l) => l.id === firstLineId)
+      if (!firstLine) continue
+      // Walk up the category hierarchy to find the direct child of the section.
+      const cat = categories.find((c) => c.id === firstLine.categoryId)
+      if (!cat) continue
+      // If the cat itself is a direct child of a section (parentId is a section root),
+      // its subId is cat.id. If it's a grandchild, subId is its parent.
+      const parent = categories.find((c) => c.id === cat.parentId)
+      if (!parent) continue
+      const grandparent = categories.find((c) => c.id === parent.parentId)
+      if (grandparent === undefined) {
+        // parent is a section root → cat is the sub-category
+        subIds.add(cat.id)
+      } else {
+        // cat is a grandchild → parent is the sub-category
+        subIds.add(parent.id)
+      }
+    }
+    const canGroup = subIds.size === 1
+    const subId = canGroup ? Array.from(subIds)[0]! : null
+    const subCategory = subId ? (categories.find((c) => c.id === subId) ?? null) : null
+    return {
+      canGroup,
+      subId,
+      itemRowIndices: Array.from(itemRowIndices),
+      lineIds,
+      subCategory,
+    }
+  }, [selectedCellKeys, flatRows, localLines, categories])
+
+  const canGroup = groupCandidates.canGroup
+
   // Numeric values behind the current selection, for the aggregate chip.
   // Item cells contribute the line amount (or 0 for empty). Subtotal cells
   // contribute the derived per-period total across their sub-categories.
@@ -2035,6 +2134,81 @@ export function ForecastGrid({
       URL.revokeObjectURL(url)
     },
     [flatRows, periods, localLines, categories, summaries, hideEmpty, collapsed, filterRowSet, selectedCellKeys],
+  )
+
+  // ── P3.4: Group popover ───────────────────────────────────────────────────
+  const [groupPopoverOpen, setGroupPopoverOpen] = useState(false)
+  const [groupLabel, setGroupLabel] = useState('')
+  const groupButtonRef = useRef<HTMLButtonElement>(null)
+  const groupPopoverRef = useRef<HTMLDivElement>(null)
+
+  // Close group popover on outside click.
+  useEffect(() => {
+    if (!groupPopoverOpen) return
+    const onDocClick = (e: MouseEvent) => {
+      if (
+        groupButtonRef.current?.contains(e.target as Node) ||
+        groupPopoverRef.current?.contains(e.target as Node)
+      ) {
+        return
+      }
+      setGroupPopoverOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [groupPopoverOpen])
+
+  // Close group popover on Escape.
+  useEffect(() => {
+    if (!groupPopoverOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setGroupPopoverOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [groupPopoverOpen])
+
+  /** Create a new group from the current selection and close the popover. */
+  const handleCreateGroup = useCallback(() => {
+    const label = groupLabel.trim()
+    if (!label || !groupCandidates.canGroup || !groupCandidates.subId) return
+    const newGroup: RowGroup = {
+      id: `grp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      label,
+      lineIds: groupCandidates.lineIds,
+      collapsed: false,
+    }
+    const subId = groupCandidates.subId
+    setGroups((prev) => ({
+      ...prev,
+      [subId]: [...(prev[subId] ?? []), newGroup],
+    }))
+    setGroupLabel('')
+    setGroupPopoverOpen(false)
+  }, [groupLabel, groupCandidates, setGroups])
+
+  /** Toggle a group's collapsed state. */
+  const handleToggleGroup = useCallback(
+    (subId: string, groupId: string) => {
+      setGroups((prev) => ({
+        ...prev,
+        [subId]: (prev[subId] ?? []).map((g) =>
+          g.id === groupId ? { ...g, collapsed: !g.collapsed } : g,
+        ),
+      }))
+    },
+    [setGroups],
+  )
+
+  /** Remove a group definition (member rows return to normal positions). */
+  const handleUngroup = useCallback(
+    (subId: string, groupId: string) => {
+      setGroups((prev) => ({
+        ...prev,
+        [subId]: (prev[subId] ?? []).filter((g) => g.id !== groupId),
+      }))
+    },
+    [setGroups],
   )
 
   /**
@@ -3142,6 +3316,68 @@ export function ForecastGrid({
               )
             })()}
           </div>
+          {/* Group… button + inline popover (P3.4) */}
+          <div className="relative">
+            <button
+              ref={groupButtonRef}
+              disabled={!canGroup || isPending}
+              onClick={() => {
+                setGroupLabel('')
+                setGroupPopoverOpen((prev) => !prev)
+              }}
+              title={
+                !canGroup
+                  ? 'Select 2+ item rows from the same sub-category to create a group'
+                  : 'Group selected rows'
+              }
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 shadow-sm hover:bg-zinc-50 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:text-zinc-400"
+            >
+              Group…
+            </button>
+            {groupPopoverOpen && (
+              <div
+                ref={groupPopoverRef}
+                className="absolute right-0 top-full z-30 mt-1 w-64 rounded-lg border border-zinc-200 bg-white p-3 shadow-lg"
+              >
+                <p className="mb-2 text-xs font-medium text-zinc-700">
+                  Group {groupCandidates.itemRowIndices.length} rows
+                  {groupCandidates.subCategory ? ` in ${groupCandidates.subCategory.name}` : ''}
+                </p>
+                <div className="mb-2">
+                  <label className="mb-1 block text-xs text-zinc-500">Group label</label>
+                  <input
+                    autoFocus
+                    type="text"
+                    value={groupLabel}
+                    placeholder="e.g. Key Clients"
+                    onChange={(e) => setGroupLabel(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleCreateGroup()
+                    }}
+                    className="w-full rounded border border-zinc-300 px-1.5 py-0.5 text-xs text-zinc-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <p className="mb-2 text-[11px] text-zinc-400">
+                  Groups are saved locally. Ctrl+Z does not undo group create/destroy.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    disabled={!groupLabel.trim()}
+                    onClick={handleCreateGroup}
+                    className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-300"
+                  >
+                    Create group
+                  </button>
+                  <button
+                    onClick={() => setGroupPopoverOpen(false)}
+                    className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
           <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-500 select-none">
             <input
               type="checkbox"
@@ -3208,6 +3444,9 @@ export function ForecastGrid({
                 highlightCell={highlightCell}
                 freezeCount={freezeCount}
                 onSplitCellOpen={handleSplitCellOpen}
+                groups={groups}
+                onToggleGroup={handleToggleGroup}
+                onUngroup={handleUngroup}
               />
             ))}
 
@@ -3542,6 +3781,9 @@ const SectionBlock = memo(function SectionBlock({
   highlightCell,
   freezeCount = 0,
   onSplitCellOpen,
+  groups,
+  onToggleGroup,
+  onUngroup,
 }: {
   section: Category
   categories: Category[]
@@ -3580,6 +3822,12 @@ const SectionBlock = memo(function SectionBlock({
     lineByPeriod: Map<string, ForecastLine>,
     isPipeline: boolean,
   ) => void
+  /** P3.4: user-defined row groups (keyed by subId). */
+  groups?: RowGroupMap
+  /** P3.4: toggle a group's collapsed state. */
+  onToggleGroup?: (subId: string, groupId: string) => void
+  /** P3.4: remove a group (restore member rows to ungrouped positions). */
+  onUngroup?: (subId: string, groupId: string) => void
 }) {
   const style = getSectionStyle(section.flowDirection)
 
@@ -3614,18 +3862,6 @@ const SectionBlock = memo(function SectionBlock({
         sectionLines.filter((l) => l.periodId === p.id).reduce((sum, l) => sum + l.amount, 0),
       ),
     [periods, sectionLines],
-  )
-
-  const itemRows = useMemo(
-    () =>
-      Array.from(itemMap.entries()).map(([key, itemLines]) => {
-        const firstLine = itemLines[0]!
-        const label = firstLine.counterparty ?? firstLine.notes ?? 'Line item'
-        const lineMap = new Map(itemLines.map((l) => [l.periodId, l]))
-        const isPipeline = firstLine.source === 'pipeline'
-        return { key, label, lineMap, isPipeline, line: firstLine }
-      }),
-    [itemMap],
   )
 
   // Build a lookup from flat-row key → flat-row index for passing isFocused and
@@ -3765,15 +4001,94 @@ const SectionBlock = memo(function SectionBlock({
             )
           })}
 
-          {itemRows.map(({ key, label, lineMap, isPipeline, line }) => {
-            const flatIdx = flatIndexByKey.get(`item::${key}`) ?? -1
+          {/* P3.4: render item rows and group header rows in flatRows order */}
+          {flatRows.map((fr, flatIdx) => {
+            if (fr.sectionId !== section.id) return null
+            if (fr.kind !== 'item' && fr.kind !== 'group') return null
+
+            // ── Group header row ─────────────────────────────────────────────
+            if (fr.kind === 'group') {
+              // Compute per-period sums across all member item rows.
+              const memberLines = fr.memberItemKeys.flatMap((key) => {
+                const itemLines = itemMap.get(key)
+                return itemLines ?? []
+              })
+              const groupPeriodTotals = periods.map((p) =>
+                memberLines.filter((l) => l.periodId === p.id).reduce((sum, l) => sum + l.amount, 0),
+              )
+              return (
+                <tr
+                  key={`group::${fr.group.id}`}
+                  className="bg-indigo-50/40 border-t border-indigo-100 text-indigo-700"
+                >
+                  <td className="sticky left-0 z-10 bg-inherit whitespace-nowrap py-1 pr-4 pl-8">
+                    <div className="flex items-center gap-1.5">
+                      {/* Collapse/expand chevron */}
+                      <button
+                        onClick={() => onToggleGroup?.(fr.subId, fr.group.id)}
+                        className="flex items-center text-indigo-400 hover:text-indigo-700"
+                        title={fr.group.collapsed ? 'Expand group' : 'Collapse group'}
+                      >
+                        <svg
+                          className={cn('w-3 h-3 transition-transform', fr.group.collapsed && '-rotate-90')}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                      <span className="text-xs font-medium">{fr.group.label}</span>
+                      <span className="text-[10px] text-indigo-400">
+                        ({fr.group.collapsed ? fr.memberItemKeys.length : fr.memberItemKeys.length} rows)
+                      </span>
+                      {/* Ungroup affordance */}
+                      <button
+                        onClick={() => onUngroup?.(fr.subId, fr.group.id)}
+                        title="Remove group (rows return to normal positions)"
+                        className="ml-1 text-[10px] text-indigo-400 hover:text-rose-600 leading-none"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </td>
+                  {groupPeriodTotals.map((total, colIdx) => {
+                    const { sticky, left } = freezeCellStyle(colIdx, freezeCount)
+                    return (
+                      <td
+                        key={periods[colIdx]!.id}
+                        className={cn(
+                          'px-2.5 py-1 text-right text-xs font-medium tabular-nums text-indigo-600',
+                          sticky && 'sticky z-[15] bg-indigo-50',
+                        )}
+                        style={sticky ? { left } : undefined}
+                      >
+                        {total !== 0 ? formatCurrency(total) : '—'}
+                      </td>
+                    )
+                  })}
+                </tr>
+              )
+            }
+
+            // ── Item row ─────────────────────────────────────────────────────
+            const key = fr.itemKey
+            const itemLines = itemMap.get(key)
+            if (!itemLines) return null
+
+            const firstLine = itemLines[0]!
+            const label = firstLine.counterparty ?? firstLine.notes ?? 'Line item'
+            const lineMap2 = new Map(itemLines.map((l) => [l.periodId, l]))
+            const isPipeline = fr.isPipeline
+            const line = firstLine
+
             // "Only matching rows" filter: skip rows not in the match set.
             // Matched rows always show even when hideEmpty is active.
             const isMatchedRow = filterRowSet != null && flatIdx >= 0 && filterRowSet.has(flatIdx)
             if (filterRowSet != null && !isMatchedRow) return null
             if (!isMatchedRow && hideEmpty && emptyKeys.has(key)) return null
             const isOverridden =
-              overriddenSet && Array.from(lineMap.values()).some((l) => overriddenSet.has(l.id))
+              overriddenSet && Array.from(lineMap2.values()).some((l) => overriddenSet.has(l.id))
             const overrideTitle = isOverridden
               ? `Overridden in ${overrideScenarioLabel ?? 'active scenario'}`
               : undefined
@@ -3784,7 +4099,7 @@ const SectionBlock = memo(function SectionBlock({
                 <ForecastRow
                   key={key}
                   label={label}
-                  lines={lineMap}
+                  lines={lineMap2}
                   periods={periods}
                   depth={2}
                   source={line.source}
@@ -3844,7 +4159,7 @@ const SectionBlock = memo(function SectionBlock({
                   )}
                 </td>
                 {periods.map((p, colIdx) => {
-                  const cellLine = lineMap.get(p.id)
+                  const cellLine = lineMap2.get(p.id)
                   const amount = cellLine?.amount ?? 0
                   const isFocusedCell =
                     focus !== null && focus.row === flatIdx && focus.col === colIdx
@@ -3910,7 +4225,7 @@ const SectionBlock = memo(function SectionBlock({
                       stickyLeft={stickyLeft}
                       onContextMenu={
                         onSplitCellOpen
-                          ? (e) => onSplitCellOpen(e, cellLine, p.id, colIdx, lineMap, isPipeline)
+                          ? (e) => onSplitCellOpen(e, cellLine, p.id, colIdx, lineMap2, isPipeline)
                           : undefined
                       }
                     />
