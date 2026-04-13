@@ -104,12 +104,6 @@ async function syncProject(projectId: string) {
     periodMap[row.week_ending] = row.id
   }
 
-  // Delete existing synced lines for this project
-  await admin
-    .from('forecast_lines')
-    .delete()
-    .eq('source_pipeline_project_id', projectId)
-
   // Build new lines
   type ClientJoin = { name: string }
   const clientName = (project.pipeline_clients as ClientJoin | null)?.name ?? 'Unknown'
@@ -179,8 +173,20 @@ async function syncProject(projectId: string) {
     }
   }
 
-  if (newLines.length > 0) {
-    await admin.from('forecast_lines').insert(newLines)
+  // Atomic delete-then-insert via RPC. All-or-nothing: if the insert fails,
+  // the delete rolls back so the project's existing forecast lines survive.
+  // Cast needed because database.types.ts hasn't been regenerated after 021.
+  // Run `npx supabase gen types typescript` to refresh.
+  const rpc = admin.rpc as unknown as (
+    name: string,
+    args: unknown,
+  ) => Promise<{ error: { message: string } | null }>
+  const { error: rpcError } = await rpc('sync_pipeline_project_lines', {
+    p_project_id: projectId,
+    p_lines: newLines,
+  })
+  if (rpcError) {
+    throw new Error(`sync_pipeline_project_lines failed: ${rpcError.message}`)
   }
 }
 
