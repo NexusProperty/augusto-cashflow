@@ -3,6 +3,7 @@
 import { requireAuth } from '@/lib/auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { z } from 'zod'
+import { UpdateLineAmountsSchema } from './schemas'
 
 const AddLineSchema = z.object({
   entityId: z.string().uuid(),
@@ -67,3 +68,25 @@ export async function deleteForecastLine(lineId: string) {
   if (error) return { error: 'Failed to delete' }
   return { ok: true }
 }
+
+export async function updateLineAmounts(
+  payload: { updates: Array<{ id: string; amount: number }> }
+): Promise<{ ok: true; count: number } | { error: string; failedIds?: string[] }> {
+  await requireAuth()
+  const parsed = UpdateLineAmountsSchema.safeParse(payload)
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' }
+
+  const admin = createAdminClient()
+  const failedIds: string[] = []
+  // Sequential updates inside a loop; acceptable for <500 rows
+  for (const u of parsed.data.updates) {
+    const { error } = await admin
+      .from('forecast_lines')
+      .update({ amount: u.amount, updated_at: new Date().toISOString() })
+      .eq('id', u.id)
+    if (error) failedIds.push(u.id)
+  }
+  if (failedIds.length > 0) return { error: 'Some updates failed', failedIds }
+  return { ok: true, count: parsed.data.updates.length }
+}
+
