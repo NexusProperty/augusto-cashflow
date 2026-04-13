@@ -1648,7 +1648,7 @@ export function ForecastGrid({
       if (!groupId) return
       const prevValue = localOdFacilityLimit
       if (prevValue === nextValue) return
-      if (!Number.isFinite(nextValue) || nextValue < 0) return
+      if (!Number.isFinite(nextValue)) return
       setLocalOdFacilityLimit(nextValue)
       startTransition(() => {
         updateGroupOdFacilityLimit({ groupId, odFacilityLimit: nextValue })

@@ -421,7 +421,7 @@ export async function updateBankOpeningBalance(input: unknown) {
 
 const UpdateGroupOdFacilityLimitSchema = z.object({
   groupId: z.string().uuid(),
-  odFacilityLimit: z.number().finite().min(0).max(1_000_000_000),
+  odFacilityLimit: z.number().finite().min(-1_000_000_000).max(1_000_000_000),
 })
 
 export async function updateGroupOdFacilityLimit(input: unknown) {

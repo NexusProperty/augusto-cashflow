@@ -625,8 +625,11 @@ export const SectionBlock = memo(function SectionBlock({
             // "Only matching rows" filter: skip rows not in the match set.
             // Matched rows always show even when hideEmpty is active.
             const isMatchedRow = filterRowSet != null && flatIdx >= 0 && filterRowSet.has(flatIdx)
-            if (filterRowSet != null && !isMatchedRow) return null
-            if (!isMatchedRow && hideEmpty && emptyKeys.has(key)) return null
+            // When the row itself is hidden, still emit the trailing "+ Add line"
+            // anchor if this was the last row of its sub — otherwise subs with a
+            // single empty item lose their add-line affordance under hideEmpty.
+            if (filterRowSet != null && !isMatchedRow) return [null, renderAddLineRow(flatIdx)]
+            if (!isMatchedRow && hideEmpty && emptyKeys.has(key)) return [null, renderAddLineRow(flatIdx)]
             const isOverridden =
               overriddenSet && Array.from(lineMap2.values()).some((l) => overriddenSet.has(l.id))
             const overrideTitle = isOverridden

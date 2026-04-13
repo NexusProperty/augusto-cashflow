@@ -10,12 +10,10 @@ interface OdFacilityLimitEditorProps {
 }
 
 function parseAmount(raw: string): number | null {
-  // Strip everything that isn't digit or decimal point. Explicitly drops
-  // minus signs so negative OD limits are impossible via this input.
-  const cleaned = raw.replace(/[^0-9.]/g, '')
+  const cleaned = raw.replace(/[$,\s]/g, '')
   if (cleaned === '') return 0
   const n = Number(cleaned)
-  if (!Number.isFinite(n) || n < 0) return null
+  if (!Number.isFinite(n)) return null
   return n
 }
 
@@ -54,7 +52,7 @@ export function OdFacilityLimitEditor({ value, editable, onCommit }: OdFacilityL
       <input
         ref={inputRef}
         value={draft}
-        onChange={(e) => setDraft(e.target.value.replace(/[^0-9.,$ ]/g, ''))}
+        onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === 'Enter') { e.preventDefault(); commit() }
