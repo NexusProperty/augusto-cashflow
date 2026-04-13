@@ -12,10 +12,13 @@ import {
 } from '@/lib/pipeline/summary-flat-rows'
 import {
   jumpToEdge,
+  normalizeRange,
   type Selection,
   type CellRef,
 } from '@/lib/pipeline/summary-selection'
 import { MetricRow } from './summary-table-rows'
+import { computeAggregates } from '@/lib/forecast/aggregates'
+import { SummarySelectionStats } from './summary-selection-stats'
 
 interface SummaryTableProps {
   rows: BUSummaryRow[]
@@ -195,6 +198,31 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
     return result
   }, [flatRowIndex, flatRows, months.length])
 
+  // Aggregates across the current selection. Month cells contribute the raw
+  // value at (row, col); virtual Total col contributes sumArray(row values) —
+  // matching what the row already displays.
+  const selectionAggregates = useMemo(() => {
+    if (!selection) return null
+    const r = normalizeRange(selection)
+    const values: number[] = []
+    for (let row = r.rowStart; row <= r.rowEnd; row++) {
+      const fr = flatRows[row]
+      if (!fr) continue
+      for (let col = r.colStart; col <= r.colEnd; col++) {
+        if (col < months.length) {
+          values.push(fr.values[col] ?? 0)
+        } else if (col === months.length) {
+          // Virtual Total column
+          let total = 0
+          for (const v of fr.values) total += v
+          values.push(total)
+        }
+      }
+    }
+    if (values.length < 2) return null
+    return computeAggregates(values)
+  }, [selection, flatRows, months.length])
+
   // Helper: given an entity or group-total row kind + metric key, resolve the
   // flat row index (or null if not visible / collapsed).
   function resolveFlatRow(entityId: string | null, metricKey: SummaryMetricKey): number | null {
@@ -211,6 +239,13 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
       onKeyDown={handleKeyDown}
       className="bg-white rounded-xl border border-zinc-200 overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
     >
+      {/* Toolbar — left slot reserved for future find/export buttons (Tasks 3 & 4). */}
+      <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-zinc-200 min-h-[44px]">
+        <div className="flex items-center gap-2" />
+        <div className="flex items-center gap-2">
+          <SummarySelectionStats aggregates={selectionAggregates} />
+        </div>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1200px] border-collapse text-sm">
           <thead>
