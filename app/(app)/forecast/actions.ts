@@ -341,3 +341,29 @@ export async function updateBankOpeningBalance(input: unknown) {
   revalidateForecast()
   return { ok: true }
 }
+
+// --- Group OD facility limit (editable on /forecast/detail Available Cash row) ---
+
+const UpdateGroupOdFacilityLimitSchema = z.object({
+  groupId: z.string().uuid(),
+  odFacilityLimit: z.number().finite().min(0).max(1_000_000_000),
+})
+
+export async function updateGroupOdFacilityLimit(input: unknown) {
+  await requireAuth()
+  const parsed = UpdateGroupOdFacilityLimitSchema.safeParse(input)
+  if (!parsed.success) return { error: parsed.error.message }
+
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from('entity_groups')
+    .update({ od_facility_limit: parsed.data.odFacilityLimit })
+    .eq('id', parsed.data.groupId)
+
+  if (error) {
+    return { error: 'Update failed' }
+  }
+
+  revalidateForecast()
+  return { ok: true }
+}

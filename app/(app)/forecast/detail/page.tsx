@@ -100,6 +100,7 @@ export default async function ForecastDetailPage({
         }))}
         weighted={weighted}
         odFacilityLimit={data.entityGroup?.odFacilityLimit ?? 0}
+        groupId={AUGUSTO_GROUP_ID}
         overriddenIds={Array.from(overriddenIds)}
         overrideScenarioLabel={
           scenarios.find((s) => s.id === params.scenario)?.name ?? undefined

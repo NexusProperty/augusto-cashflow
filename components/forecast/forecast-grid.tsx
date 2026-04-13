@@ -45,7 +45,8 @@ import { evaluateFormula, type EvalContext } from '@/lib/forecast/formula'
 import { buildCsv } from '@/lib/forecast/export'
 import { FindBar } from './find-bar'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
-import { updateBankOpeningBalance } from '@/app/(app)/forecast/actions'
+import { updateBankOpeningBalance, updateGroupOdFacilityLimit } from '@/app/(app)/forecast/actions'
+import { OdFacilityLimitEditor } from '@/components/forecast/od-facility-limit-editor'
 import type { BankAccount, ForecastLine, LineStatus, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
 
@@ -293,6 +294,8 @@ interface ForecastGridProps {
   overrideScenarioLabel?: string
   weighted?: boolean
   odFacilityLimit?: number
+  /** Group id for editable OD facility limit (writes to entity_groups.od_facility_limit). */
+  groupId?: string
   scenarioId?: string | null
   /**
    * Main bank accounts for Section 1 per-bank opening-balance rows.
@@ -312,6 +315,7 @@ export function ForecastGrid({
   overrideScenarioLabel,
   weighted = true,
   odFacilityLimit = 0,
+  groupId,
   scenarioId = null,
   bankAccounts: bankAccountsProp,
 }: ForecastGridProps) {
@@ -386,6 +390,15 @@ export function ForecastGrid({
   const formulaGraphRef = useRef<Map<string, string[]>>(new Map())
   const periodsRef = useRef(periods)
 
+  // ── Group OD facility limit (editable) ────────────────────────────────────
+  // Optimistic override of the server value; engine recomputes Available Cash
+  // + OD Status from this immediately.
+  const [localOdFacilityLimit, setLocalOdFacilityLimit] = useState<number>(odFacilityLimit)
+  useEffect(() => {
+    if (isPending) return
+    setLocalOdFacilityLimit(odFacilityLimit)
+  }, [odFacilityLimit, isPending])
+
   // ── Per-bank opening balances (Section 1) ─────────────────────────────────
   // Optimistic week-1 balances keyed by bank id. Seeded from server props and
   // updated immediately on user edits so the engine can recompute cascades.
@@ -417,8 +430,8 @@ export function ForecastGrid({
   // Derive summaries from local state so edits cascade to NetOperating,
   // ClosingBalance, AvailableCash, OD Status immediately.
   const summaries = useMemo(
-    () => computeWeekSummaries(periods, localLines, categories, odFacilityLimit, weighted, bankAccountsForEngine),
-    [periods, localLines, categories, odFacilityLimit, weighted, bankAccountsForEngine],
+    () => computeWeekSummaries(periods, localLines, categories, localOdFacilityLimit, weighted, bankAccountsForEngine),
+    [periods, localLines, categories, localOdFacilityLimit, weighted, bankAccountsForEngine],
   )
   // `summariesProp` is retained for first-render parity / fallback.
   const summaryMap = useMemo(
@@ -1456,6 +1469,33 @@ export function ForecastGrid({
       })
     },
     [localBankBalances, bankAccountsProp, scenarioId, isReplayingRef, undoStackRef, startTransition, markError, markSaved],
+  )
+
+  // ── Group OD facility limit commit ────────────────────────────────────────
+  const handleOdFacilityLimitCommit = useCallback(
+    (nextValue: number) => {
+      if (!groupId) return
+      const prevValue = localOdFacilityLimit
+      if (prevValue === nextValue) return
+      if (!Number.isFinite(nextValue) || nextValue < 0) return
+      setLocalOdFacilityLimit(nextValue)
+      startTransition(() => {
+        updateGroupOdFacilityLimit({ groupId, odFacilityLimit: nextValue })
+          .then((res) => {
+            if (res && 'error' in res) {
+              setLocalOdFacilityLimit(prevValue)
+              markError(res.error ?? 'Update failed')
+            } else {
+              markSaved()
+            }
+          })
+          .catch((err) => {
+            setLocalOdFacilityLimit(prevValue)
+            markError(err instanceof Error ? err.message : 'Network error')
+          })
+      })
+    },
+    [groupId, localOdFacilityLimit, startTransition, markError, markSaved],
   )
 
   // ── Shared commit pipeline (shift, duplicate, copy-forward, split) ────────────
@@ -2748,7 +2788,17 @@ export function ForecastGrid({
 
             {/* Available Cash */}
             <tr className="border-t border-zinc-200">
-              <td className="sticky left-0 z-10 bg-white px-3 py-1.5 text-sm text-zinc-600">Available Cash (incl. OD)</td>
+              <td className="sticky left-0 z-10 bg-white px-3 py-1.5 text-sm text-zinc-600">
+                <div className="flex items-center gap-1.5">
+                  <span>Available Cash (incl. OD</span>
+                  <OdFacilityLimitEditor
+                    value={localOdFacilityLimit}
+                    editable={Boolean(groupId)}
+                    onCommit={handleOdFacilityLimitCommit}
+                  />
+                  <span>)</span>
+                </div>
+              </td>
               {periods.map((p, colIdx) => {
                 const s = summaryMap.get(p.id)
                 const { sticky, left } = freezeCellStyle(colIdx, freezeCount)
