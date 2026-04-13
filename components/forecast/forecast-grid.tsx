@@ -131,6 +131,11 @@ export function ForecastGrid({
   const handleShiftRef = useRef<(n: number, opts: { autoConfirm: boolean }) => Promise<void>>(
     async () => { /* noop until handleShift is defined below */ },
   )
+
+  // Stable ref to handleDeleteSelection — same forward-reference pattern as handleShiftRef.
+  const handleDeleteSelectionRef = useRef<() => void>(() => { /* noop until defined below */ })
+  // Stable ref to selectedCellKeys.size — read in handleGridKeyDown (defined earlier).
+  const selectedCellKeysSizeRef = useRef(0)
   const localLinesRef = useRef(localLines)
   useEffect(() => { localLinesRef.current = localLines }, [localLines])
 
@@ -1294,6 +1299,19 @@ export function ForecastGrid({
         return
       }
 
+      // ── Delete / Backspace: clear amounts for selected cells ─────────────
+      if (
+        (e.key === 'Delete' || e.key === 'Backspace') &&
+        !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
+      ) {
+        const active = document.activeElement
+        if (active && active.tagName === 'INPUT') return
+        if (selectedCellKeysSizeRef.current === 0) return
+        handleDeleteSelectionRef.current()
+        e.preventDefault()
+        return
+      }
+
       if (!e.shiftKey) return
       if (!selection) return
       // Only act on Shift+Arrow; Shift+Tab etc is handled by the cell itself.
@@ -1456,6 +1474,31 @@ export function ForecastGrid({
     },
     [selectedCellKeys, flatRows, periods, startTransition, markError, markSaved, scenarioId],
   )
+
+  // ── Delete / Backspace: clear amounts for selected cells ──────────────────
+
+  const handleDeleteSelection = useCallback(() => {
+    const updates: Array<{ id: string; amount: number }> = []
+    const seen = new Set<string>()
+    for (const key of selectedCellKeys) {
+      const [rowStr, colStr] = key.split(':')
+      const row = Number(rowStr)
+      const col = Number(colStr)
+      const fr = flatRows[row]
+      const period = periods[col]
+      if (!fr || fr.kind !== 'item' || !period) continue
+      if (fr.isPipeline) continue
+      const line = fr.lineByPeriod.get(period.id)
+      if (!line || line.source === 'pipeline') continue
+      if (seen.has(line.id)) continue
+      seen.add(line.id)
+      updates.push({ id: line.id, amount: 0 })
+    }
+    if (updates.length > 0) saveUpdates(updates)
+  }, [selectedCellKeys, flatRows, periods, saveUpdates])
+  // Keep refs in sync so handleGridKeyDown (defined earlier) can call the latest closure.
+  useEffect(() => { handleDeleteSelectionRef.current = handleDeleteSelection }, [handleDeleteSelection])
+  useEffect(() => { selectedCellKeysSizeRef.current = selectedCellKeys.size }, [selectedCellKeys])
 
   // ── Shift-by-N-weeks ─────────────────────────────────────────────────────
 
