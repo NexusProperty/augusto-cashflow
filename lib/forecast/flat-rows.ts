@@ -93,8 +93,11 @@ export function buildFlatRows(
 
     const { itemMap } = buildItemRows(section, children, categories, lines)
     for (const [key, itemLines] of itemMap) {
-      const firstLine = itemLines[0]!
-      const isPipeline = firstLine.source === 'pipeline'
+      // A row is "pipeline-only" only when EVERY line is pipeline-sourced.
+      // A mixed row (manual + pipeline for the same counterparty/category)
+      // stays navigable; per-cell save logic skips pipeline cells while
+      // letting the user edit the manual ones.
+      const isPipeline = itemLines.every((l) => l.source === 'pipeline')
       const lineByPeriod = new Map(itemLines.map((l) => [l.periodId, l]))
       rows.push({
         kind: 'item',

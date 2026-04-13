@@ -154,4 +154,22 @@ describe('buildFlatRows', () => {
     if (acme?.kind === 'item') expect(acme.isPipeline).toBe(false)
     if (pipeline?.kind === 'item') expect(pipeline.isPipeline).toBe(true)
   })
+
+  it('treats a row as non-pipeline when manual AND pipeline lines share the same counterparty', () => {
+    // Same category + same counterparty → grouped into one row.
+    // If ANY line is manual, the row must stay editable so the user can
+    // edit the manual entries. Per-cell save logic skips pipeline cells.
+    const lines = [
+      mkLine('l1', 'inflows_ar', 'p1', 1000, 'pipeline', 'Mixed Client'),
+      mkLine('l2', 'inflows_ar', 'p2', 500, 'manual', 'Mixed Client'),
+    ]
+
+    const rows = buildFlatRows(sections, categories, lines, {})
+    const mixed = rows.find((r) => r.kind === 'item' && r.itemKey.includes('Mixed Client'))
+    expect(mixed?.kind).toBe('item')
+    if (mixed?.kind === 'item') {
+      expect(mixed.isPipeline).toBe(false)
+      expect(isFocusable(mixed)).toBe(true)
+    }
+  })
 })

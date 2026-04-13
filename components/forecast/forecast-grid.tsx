@@ -67,18 +67,26 @@ export function ForecastGrid({
 
   // ── Optimistic local state ────────────────────────────────────────────────
   const [localLines, setLocalLines] = useState<ForecastLine[]>(linesProp)
-  // Resync when server prop reference changes (e.g. revalidatePath).
+  // Resync when server prop reference changes (e.g. revalidatePath) — but ONLY
+  // while no save is in flight. A mid-flight optimistic edit must not be
+  // overwritten by a stale revalidate that raced ahead of the save's .then.
+  // When isPending flips back to false, the effect runs again with the latest
+  // linesProp and we pick up the server state.
   useEffect(() => {
+    if (isPending) return
     setLocalLines(linesProp)
-  }, [linesProp])
+  }, [linesProp, isPending])
 
   // Snapshot of last-server-known amounts, used to revert on server error.
+  // Same guard: only resync while no save is in flight, or we'd clobber a
+  // pending-save's captured `old` snapshot.
   const snapshotRef = useRef<Map<string, number>>(new Map())
   useEffect(() => {
+    if (isPending) return
     const m = new Map<string, number>()
     for (const l of linesProp) m.set(l.id, l.amount)
     snapshotRef.current = m
-  }, [linesProp])
+  }, [linesProp, isPending])
 
   // Derive summaries from local state so edits cascade to NetOperating,
   // ClosingBalance, AvailableCash, OD Status immediately.
@@ -106,11 +114,18 @@ export function ForecastGrid({
   const saveUpdates = useCallback(
     (updates: Array<{ id: string; amount: number }>) => {
       if (updates.length === 0) return
-      // Snapshot old values for revert
+      // Capture pre-edit values for potential revert. Done BEFORE we mutate
+      // snapshotRef so a concurrent second save sees the latest optimistic
+      // state — not the pre-first-save values.
       const old = updates.map((u) => ({
         id: u.id,
         amount: snapshotRef.current.get(u.id) ?? 0,
       }))
+
+      // Promote the optimistic values into the snapshot immediately. If a
+      // second save fires before this one's .then resolves, it will capture
+      // THIS edit's new values in its own `old`, not the stale pre-edit ones.
+      for (const u of updates) snapshotRef.current.set(u.id, u.amount)
 
       // Optimistic UI
       applyLocal(updates)
@@ -119,18 +134,22 @@ export function ForecastGrid({
         updateLineAmounts({ updates })
           .then((res) => {
             if ('error' in res) {
-              // Revert optimistic application on failure
+              // Revert local state AND the snapshot — the server never
+              // accepted these values, so subsequent saves must see the
+              // real pre-edit amounts.
               applyLocal(old)
+              for (const o of old) snapshotRef.current.set(o.id, o.amount)
               console.warn('updateLineAmounts failed:', res.error)
               markError(res.error ?? 'Save failed')
             } else {
-              // Commit to snapshot so next revert uses latest server state
-              for (const u of updates) snapshotRef.current.set(u.id, u.amount)
+              // Snapshot already holds the optimistic values — nothing more
+              // to do. Mark saved for the UI chip.
               markSaved()
             }
           })
           .catch((err) => {
             applyLocal(old)
+            for (const o of old) snapshotRef.current.set(o.id, o.amount)
             console.warn('updateLineAmounts threw:', err)
             markError(err instanceof Error ? err.message : 'Network error')
           })
