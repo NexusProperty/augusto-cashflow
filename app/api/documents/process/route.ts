@@ -146,7 +146,7 @@ export async function POST(req: Request) {
 
     if (!aiResponse.ok) {
       const errText = await aiResponse.text()
-      await supabase.from('documents').update({ status: 'failed', error_message: `AI error: ${errText.slice(0, 200)}` }).eq('id', documentId)
+      await supabase.from('documents').update({ status: 'failed', error_message: `AI error: ${errText.slice(0, 1000)}` }).eq('id', documentId)
       return NextResponse.json({ error: 'AI extraction failed' }, { status: 500 })
     }
 
@@ -168,7 +168,7 @@ export async function POST(req: Request) {
 
     const validated = ExtractionResult.safeParse(parsed)
     if (!validated.success) {
-      await supabase.from('documents').update({ status: 'failed', error_message: `Schema validation: ${validated.error.message.slice(0, 200)}` }).eq('id', documentId)
+      await supabase.from('documents').update({ status: 'failed', error_message: `Schema validation: ${validated.error.message.slice(0, 1000)}` }).eq('id', documentId)
       return NextResponse.json({ error: 'Schema validation failed' }, { status: 500 })
     }
 
