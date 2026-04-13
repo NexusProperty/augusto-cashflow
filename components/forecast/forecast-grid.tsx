@@ -1,11 +1,16 @@
 'use client'
 
-import { useTransition, useState, useCallback, useMemo, memo } from 'react'
+import { useTransition, useState, useCallback, useMemo, useEffect, useRef, memo } from 'react'
 import { ForecastRow } from './forecast-row'
+import { InlineCell } from './inline-cell'
 import { Badge } from '@/components/ui/badge'
-import { updateLineAmount } from '@/app/(app)/forecast/actions'
+import { updateLineAmounts } from '@/app/(app)/forecast/actions'
+import { computeWeekSummaries } from '@/lib/forecast/engine'
+import { prorateSubtotal } from '@/lib/forecast/proration'
+import { buildFlatRows, buildItemRows, isFocusable, type FlatRow } from '@/lib/forecast/flat-rows'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
 import type { ForecastLine, Period, Category, WeekSummary } from '@/lib/types'
+import type { Direction } from './inline-cell-keys'
 
 interface ForecastGridProps {
   periods: Period[]
@@ -14,72 +19,123 @@ interface ForecastGridProps {
   summaries: WeekSummary[]
   overriddenIds?: string[]
   overrideScenarioLabel?: string
-}
-
-// Compute unique item rows for a section (grouped by categoryId + label)
-function buildItemRows(
-  section: Category,
-  sectionChildren: Category[],
-  categories: Category[],
-  lines: ForecastLine[],
-) {
-  const sectionLines = lines.filter((l) => {
-    const cat = categories.find((c) => c.id === l.categoryId)
-    if (!cat) return false
-    return (
-      cat.parentId === section.id ||
-      sectionChildren.some((sc) => sc.id === cat.parentId || sc.id === cat.id)
-    )
-  })
-
-  // Group lines by item key (categoryId + label) — one logical row per unique item
-  const itemMap = new Map<string, ForecastLine[]>()
-  for (const l of sectionLines) {
-    const label = l.counterparty ?? l.notes ?? 'Line item'
-    const key = `${l.categoryId}::${label}`
-    if (!itemMap.has(key)) itemMap.set(key, [])
-    itemMap.get(key)!.push(l)
-  }
-
-  return { sectionLines, itemMap }
+  weighted?: boolean
+  odFacilityLimit?: number
 }
 
 export function ForecastGrid({
   periods,
   categories,
-  lines,
-  summaries,
+  lines: linesProp,
+  summaries: summariesProp,
   overriddenIds,
   overrideScenarioLabel,
+  weighted = true,
+  odFacilityLimit = 0,
 }: ForecastGridProps) {
   const [, startTransition] = useTransition()
 
-  const summaryMap = useMemo(() => new Map(summaries.map((s) => [s.periodId, s])), [summaries])
+  // ── Optimistic local state ────────────────────────────────────────────────
+  const [localLines, setLocalLines] = useState<ForecastLine[]>(linesProp)
+  // Resync when server prop reference changes (e.g. revalidatePath).
+  useEffect(() => {
+    setLocalLines(linesProp)
+  }, [linesProp])
+
+  // Snapshot of last-server-known amounts, used to revert on server error.
+  const snapshotRef = useRef<Map<string, number>>(new Map())
+  useEffect(() => {
+    const m = new Map<string, number>()
+    for (const l of linesProp) m.set(l.id, l.amount)
+    snapshotRef.current = m
+  }, [linesProp])
+
+  // Derive summaries from local state so edits cascade to NetOperating,
+  // ClosingBalance, AvailableCash, OD Status immediately.
+  const summaries = useMemo(
+    () => computeWeekSummaries(periods, localLines, categories, odFacilityLimit, weighted),
+    [periods, localLines, categories, odFacilityLimit, weighted],
+  )
+  // `summariesProp` is retained for first-render parity / fallback.
+  const summaryMap = useMemo(
+    () => new Map((summaries.length > 0 ? summaries : summariesProp).map((s) => [s.periodId, s])),
+    [summaries, summariesProp],
+  )
+
   const overriddenSet = useMemo(() => new Set(overriddenIds ?? []), [overriddenIds])
 
-  const handleCellSave = useCallback((lineId: string, amount: number) => {
-    const fd = new FormData()
-    fd.set('lineId', lineId)
-    fd.set('amount', String(amount))
-    startTransition(() => { updateLineAmount(fd) })
-  }, [startTransition])
+  // ── Save plumbing ─────────────────────────────────────────────────────────
+
+  const applyLocal = useCallback((updates: Array<{ id: string; amount: number }>) => {
+    setLocalLines((prev) => {
+      const m = new Map(updates.map((u) => [u.id, u.amount]))
+      return prev.map((l) => (m.has(l.id) ? { ...l, amount: m.get(l.id)! } : l))
+    })
+  }, [])
+
+  const saveUpdates = useCallback(
+    (updates: Array<{ id: string; amount: number }>) => {
+      if (updates.length === 0) return
+      // Snapshot old values for revert
+      const old = updates.map((u) => ({
+        id: u.id,
+        amount: snapshotRef.current.get(u.id) ?? 0,
+      }))
+
+      // Optimistic UI
+      applyLocal(updates)
+
+      startTransition(() => {
+        updateLineAmounts({ updates })
+          .then((res) => {
+            if ('error' in res) {
+              // Revert optimistic application on failure
+              applyLocal(old)
+              console.warn('updateLineAmounts failed:', res.error)
+            } else {
+              // Commit to snapshot so next revert uses latest server state
+              for (const u of updates) snapshotRef.current.set(u.id, u.amount)
+            }
+          })
+          .catch((err) => {
+            applyLocal(old)
+            console.warn('updateLineAmounts threw:', err)
+          })
+      })
+    },
+    [applyLocal, startTransition],
+  )
+
+  const handleCellSave = useCallback(
+    (lineId: string, amount: number) => {
+      saveUpdates([{ id: lineId, amount }])
+    },
+    [saveUpdates],
+  )
+
+  const handleCellClear = useCallback(
+    (lineId: string) => {
+      saveUpdates([{ id: lineId, amount: 0 }])
+    },
+    [saveUpdates],
+  )
+
+  // ── Sections + collapsed state ────────────────────────────────────────────
 
   const sections = useMemo(
-    () => categories
-      .filter((c) => c.parentId === null && c.flowDirection !== 'computed')
-      .sort((a, b) => a.sortOrder - b.sortOrder),
+    () =>
+      categories
+        .filter((c) => c.parentId === null && c.flowDirection !== 'computed')
+        .sort((a, b) => a.sortOrder - b.sortOrder),
     [categories],
   )
 
   // Default collapsed: sections with no data start collapsed
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
-    const sects = categories
-      .filter((c) => c.parentId === null && c.flowDirection !== 'computed')
-      .sort((a, b) => a.sortOrder - b.sortOrder)
     const init: Record<string, boolean> = {}
-    for (const section of sects) {
+    for (const section of sections) {
       const children = categories.filter((c) => c.parentId === section.id)
-      const hasData = lines.some((l) => {
+      const hasData = linesProp.some((l) => {
         if (l.amount === 0) return false
         const cat = categories.find((c) => c.id === l.categoryId)
         if (!cat) return false
@@ -99,21 +155,76 @@ export function ForecastGrid({
     setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }))
   }, [])
 
-  // Compute total hidden rows for the footer — memoized to avoid O(n*m) on every render
+  // ── Flat rows for focus navigation ────────────────────────────────────────
+
+  const flatRows = useMemo(
+    () => buildFlatRows(sections, categories, localLines, collapsed),
+    [sections, categories, localLines, collapsed],
+  )
+
+  // Focus coordinates live in (flatRowIndex, periodIndex) space.
+  const [focus, setFocus] = useState<{ row: number; col: number } | null>(null)
+
+  const moveFocus = useCallback(
+    (fromRow: number, fromCol: number, direction: Direction) => {
+      const colMax = periods.length - 1
+      if (colMax < 0) return
+      if (direction === 'left' || direction === 'right') {
+        let col = fromCol + (direction === 'right' ? 1 : -1)
+        col = Math.max(0, Math.min(colMax, col))
+        setFocus({ row: fromRow, col })
+        return
+      }
+      // up / down — find next focusable row
+      const step = direction === 'down' ? 1 : -1
+      let r = fromRow + step
+      while (r >= 0 && r < flatRows.length) {
+        if (isFocusable(flatRows[r])) {
+          setFocus({ row: r, col: fromCol })
+          return
+        }
+        r += step
+      }
+      // No move if none found
+    },
+    [flatRows, periods.length],
+  )
+
+  // ── Subtotal proration handler ────────────────────────────────────────────
+
+  const handleSubtotalSave = useCallback(
+    (subCategoryIds: string[], periodId: string, newTotal: number) => {
+      const result = prorateSubtotal(localLines, subCategoryIds, periodId, newTotal)
+      if (result.reason === 'no-lines') {
+        console.warn('Subtotal edit: no lines to prorate across — add a line first')
+        return
+      }
+      if (result.reason === 'all-pipeline') {
+        console.warn('Subtotal edit: all lines are pipeline-synced — edit in Pipeline page')
+        return
+      }
+      if (result.changed.length === 0) return
+      saveUpdates(result.changed)
+    },
+    [localLines, saveUpdates],
+  )
+
+  // ── Hidden rows count (footer) ────────────────────────────────────────────
+
   const totalHiddenCount = useMemo(() => {
     if (!hideEmpty) return 0
     return sections.reduce((total, section) => {
       const children = categories
         .filter((c) => c.parentId === section.id)
         .sort((a, b) => a.sortOrder - b.sortOrder)
-      const { itemMap } = buildItemRows(section, children, categories, lines)
+      const { itemMap } = buildItemRows(section, children, categories, localLines)
       let hidden = 0
       for (const itemLines of itemMap.values()) {
         if (itemLines.every((l) => l.amount === 0)) hidden++
       }
       return total + hidden
     }, 0)
-  }, [hideEmpty, sections, categories, lines])
+  }, [hideEmpty, sections, categories, localLines])
 
   return (
     <div>
@@ -174,8 +285,13 @@ export function ForecastGrid({
                 section={section}
                 categories={categories}
                 periods={periods}
-                lines={lines}
+                lines={localLines}
+                flatRows={flatRows}
+                focus={focus}
                 onCellSave={handleCellSave}
+                onCellClear={handleCellClear}
+                onSubtotalSave={handleSubtotalSave}
+                onMoveFocus={moveFocus}
                 collapsed={collapsed[section.id] ?? false}
                 onToggle={toggleSection}
                 hideEmpty={hideEmpty}
@@ -297,7 +413,6 @@ function getSectionStyle(flowDirection: string) {
         totalColor: 'text-rose-700',
       }
     default:
-      // balance / computed
       return {
         headerBg: 'bg-zinc-50/80',
         stickyBg: 'bg-zinc-50',
@@ -315,7 +430,12 @@ const SectionBlock = memo(function SectionBlock({
   categories,
   periods,
   lines,
+  flatRows,
+  focus,
   onCellSave,
+  onCellClear,
+  onSubtotalSave,
+  onMoveFocus,
   collapsed,
   onToggle,
   hideEmpty,
@@ -326,7 +446,12 @@ const SectionBlock = memo(function SectionBlock({
   categories: Category[]
   periods: Period[]
   lines: ForecastLine[]
+  flatRows: FlatRow[]
+  focus: { row: number; col: number } | null
   onCellSave: (lineId: string, amount: number) => void
+  onCellClear: (lineId: string) => void
+  onSubtotalSave: (subCategoryIds: string[], periodId: string, newTotal: number) => void
+  onMoveFocus: (row: number, col: number, direction: Direction) => void
   collapsed: boolean
   onToggle: (id: string) => void
   hideEmpty: boolean
@@ -336,9 +461,10 @@ const SectionBlock = memo(function SectionBlock({
   const style = getSectionStyle(section.flowDirection)
 
   const sectionChildren = useMemo(
-    () => categories
-      .filter((c) => c.parentId === section.id)
-      .sort((a, b) => a.sortOrder - b.sortOrder),
+    () =>
+      categories
+        .filter((c) => c.parentId === section.id)
+        .sort((a, b) => a.sortOrder - b.sortOrder),
     [categories, section.id],
   )
 
@@ -347,7 +473,6 @@ const SectionBlock = memo(function SectionBlock({
     [section, sectionChildren, categories, lines],
   )
 
-  // Determine which item keys are all-zero across all periods
   const emptyKeys = useMemo(() => {
     const keys = new Set<string>()
     for (const [key, itemLines] of itemMap) {
@@ -358,32 +483,39 @@ const SectionBlock = memo(function SectionBlock({
     return keys
   }, [itemMap])
 
-  const allZero = useMemo(
-    () => sectionLines.every((l) => l.amount === 0),
-    [sectionLines],
-  )
+  const allZero = useMemo(() => sectionLines.every((l) => l.amount === 0), [sectionLines])
 
-  // Section totals per period column
   const sectionTotals = useMemo(
-    () => periods.map((p) =>
-      sectionLines
-        .filter((l) => l.periodId === p.id)
-        .reduce((sum, l) => sum + l.amount, 0),
-    ),
+    () =>
+      periods.map((p) =>
+        sectionLines.filter((l) => l.periodId === p.id).reduce((sum, l) => sum + l.amount, 0),
+      ),
     [periods, sectionLines],
   )
 
-  // Build ordered item rows from the map (preserves insertion order = line order)
   const itemRows = useMemo(
-    () => Array.from(itemMap.entries()).map(([key, itemLines]) => {
-      const firstLine = itemLines[0]!
-      const label = firstLine.counterparty ?? firstLine.notes ?? 'Line item'
-      const lineMap = new Map(itemLines.map((l) => [l.periodId, l]))
-      const isPipeline = firstLine.source === 'pipeline'
-      return { key, label, lineMap, isPipeline, line: firstLine }
-    }),
+    () =>
+      Array.from(itemMap.entries()).map(([key, itemLines]) => {
+        const firstLine = itemLines[0]!
+        const label = firstLine.counterparty ?? firstLine.notes ?? 'Line item'
+        const lineMap = new Map(itemLines.map((l) => [l.periodId, l]))
+        const isPipeline = firstLine.source === 'pipeline'
+        return { key, label, lineMap, isPipeline, line: firstLine }
+      }),
     [itemMap],
   )
+
+  // Build a lookup from flat-row key → flat-row index for passing isFocused and
+  // per-cell focus callbacks down to InlineCell.
+  const flatIndexByKey = useMemo(() => {
+    const m = new Map<string, number>()
+    for (let i = 0; i < flatRows.length; i++) {
+      const r = flatRows[i]!
+      if (r.kind === 'subtotal') m.set(`sub::${r.subId}`, i)
+      else if (r.kind === 'item') m.set(`item::${r.itemKey}`, i)
+    }
+    return m
+  }, [flatRows])
 
   return (
     <>
@@ -426,49 +558,62 @@ const SectionBlock = memo(function SectionBlock({
         ))}
       </tr>
 
-      {/* Sub-section label rows + data rows — only when not collapsed */}
+      {/* Sub-section subtotal rows + data rows — only when not collapsed */}
       {!collapsed && (
         <>
           {sectionChildren.map((sub) => {
-            // Compute sub-section totals: sum lines belonging to this sub-section per period
-            const subLines = sectionLines.filter((l) => {
-              const cat = categories.find((c) => c.id === l.categoryId)
-              if (!cat) return false
-              return cat.parentId === sub.id || cat.id === sub.id
-            })
-            const subLineMap = new Map<string, ForecastLine>()
-            for (const period of periods) {
-              const periodTotal = subLines
-                .filter((l) => l.periodId === period.id)
-                .reduce((sum, l) => sum + l.amount, 0)
-              if (periodTotal !== 0) {
-                // Synthesize a virtual line for totalling purposes
-                subLineMap.set(period.id, {
-                  id: `sub-total-${sub.id}-${period.id}`,
-                  entityId: '',
-                  periodId: period.id,
-                  categoryId: sub.id,
-                  amount: periodTotal,
-                  counterparty: null,
-                  notes: null,
-                  source: 'manual',
-                  confidence: 100,
-                  sourceDocumentId: null,
-                  sourceRuleId: null,
-                  sourcePipelineProjectId: null,
-                  lineStatus: 'none',
-                })
-              }
-            }
+            const subCategoryIds = [
+              sub.id,
+              ...categories.filter((c) => c.parentId === sub.id).map((c) => c.id),
+            ]
+            const subLines = sectionLines.filter((l) => subCategoryIds.includes(l.categoryId))
+            const hasEditable = subLines.some((l) => l.source !== 'pipeline')
+
+            const flatIdx = flatIndexByKey.get(`sub::${sub.id}`) ?? -1
+
+            // Per-period totals for this sub-section
+            const periodTotals = periods.map((p) =>
+              subLines.filter((l) => l.periodId === p.id).reduce((sum, l) => sum + l.amount, 0),
+            )
+
             return (
-              <ForecastRow
+              <tr
                 key={sub.id}
-                label={sub.sectionNumber ? `${sub.sectionNumber}. ${sub.name}` : sub.name}
-                lines={subLineMap}
-                periods={periods}
-                depth={1}
-                isComputed
-              />
+                className="bg-zinc-50/50 font-medium border-t border-zinc-100 text-zinc-600"
+              >
+                <td className="sticky left-0 z-10 bg-inherit whitespace-nowrap py-1.5 pr-4 text-sm pl-6">
+                  {sub.sectionNumber ? `${sub.sectionNumber}. ${sub.name}` : sub.name}
+                </td>
+                {periods.map((p, colIdx) => {
+                  const total = periodTotals[colIdx] ?? 0
+                  const isFocusedCell =
+                    focus !== null && focus.row === flatIdx && focus.col === colIdx
+                  if (!hasEditable) {
+                    return (
+                      <InlineCell
+                        key={p.id}
+                        value={total}
+                        isComputed
+                        isNegative={total < 0}
+                        onSave={() => {}}
+                        onMoveFocus={(dir) => onMoveFocus(flatIdx, colIdx, dir)}
+                        isFocused={isFocusedCell}
+                      />
+                    )
+                  }
+                  return (
+                    <InlineCell
+                      key={p.id}
+                      value={total}
+                      isComputed={false}
+                      isNegative={total < 0}
+                      onSave={(newTotal) => onSubtotalSave(subCategoryIds, p.id, newTotal)}
+                      onMoveFocus={(dir) => onMoveFocus(flatIdx, colIdx, dir)}
+                      isFocused={isFocusedCell}
+                    />
+                  )
+                })}
+              </tr>
             )
           })}
 
@@ -479,42 +624,103 @@ const SectionBlock = memo(function SectionBlock({
             const overrideTitle = isOverridden
               ? `Overridden in ${overrideScenarioLabel ?? 'active scenario'}`
               : undefined
+
+            const flatIdx = flatIndexByKey.get(`item::${key}`) ?? -1
+
+            if (isPipeline) {
+              // Read-only row — delegate to ForecastRow
+              return (
+                <ForecastRow
+                  key={key}
+                  label={label}
+                  lines={lineMap}
+                  periods={periods}
+                  depth={2}
+                  source={line.source}
+                  confidence={line.confidence}
+                  lineStatus={line.lineStatus}
+                  readOnlyCells
+                  badge={
+                    <>
+                      <Badge variant="pipeline" className="ml-1.5">
+                        Pipeline
+                      </Badge>
+                      {isOverridden && (
+                        <span
+                          title={overrideTitle}
+                          className="ml-1.5 inline-flex items-center rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20"
+                        >
+                          Overridden
+                        </span>
+                      )}
+                    </>
+                  }
+                  title={overrideTitle ?? (line.counterparty ?? undefined)}
+                />
+              )
+            }
+
+            // Editable item row — render directly so we can pass focus props per cell.
             return (
-              <ForecastRow
-                key={key}
-                label={label}
-                lines={lineMap}
-                periods={periods}
-                depth={2}
-                source={line.source}
-                confidence={line.confidence}
-                lineStatus={line.lineStatus}
-                onCellSave={
-                  isPipeline
-                    ? undefined
-                    : (periodId, amount) => {
-                        const targetLine = lineMap.get(periodId)
-                        if (targetLine) onCellSave(targetLine.id, amount)
+              <tr key={key} className="" title={overrideTitle}>
+                <td className="sticky left-0 z-10 bg-inherit whitespace-nowrap py-1.5 pr-4 text-sm pl-10">
+                  {line.source && (
+                    <span
+                      className={cn(
+                        'mr-1.5 text-[8px]',
+                        line.source === 'document'
+                          ? 'text-indigo-500'
+                          : line.source === 'recurring'
+                            ? 'text-emerald-500'
+                            : 'text-zinc-400',
+                      )}
+                    >
+                      ●
+                    </span>
+                  )}
+                  {label}
+                  {isOverridden && (
+                    <span
+                      title={overrideTitle}
+                      className="ml-1.5 inline-flex items-center rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20"
+                    >
+                      Overridden
+                    </span>
+                  )}
+                  {line.confidence !== undefined && line.confidence < 100 && (
+                    <span className="ml-1.5 text-xs text-amber-600">{line.confidence}%</span>
+                  )}
+                </td>
+                {periods.map((p, colIdx) => {
+                  const cellLine = lineMap.get(p.id)
+                  const amount = cellLine?.amount ?? 0
+                  const isFocusedCell =
+                    focus !== null && focus.row === flatIdx && focus.col === colIdx
+                  return (
+                    <InlineCell
+                      key={p.id}
+                      value={amount}
+                      isNegative={amount < 0}
+                      isComputed={!cellLine}
+                      lineStatus={cellLine?.lineStatus}
+                      onSave={(newAmount) => {
+                        if (cellLine) onCellSave(cellLine.id, newAmount)
+                      }}
+                      onClear={
+                        cellLine
+                          ? () => onCellClear(cellLine.id)
+                          : undefined
                       }
-                }
-                readOnlyCells={isPipeline}
-                badge={
-                  <>
-                    {isPipeline && <Badge variant="pipeline" className="ml-1.5">Pipeline</Badge>}
-                    {isOverridden && (
-                      <span
-                        title={overrideTitle}
-                        className="ml-1.5 inline-flex items-center rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20"
-                      >
-                        Overridden
-                      </span>
-                    )}
-                  </>
-                }
-                title={
-                  overrideTitle ?? (isPipeline && line.counterparty ? line.counterparty : undefined)
-                }
-              />
+                      onMoveFocus={(dir) => {
+                        if (flatIdx >= 0) {
+                          onMoveFocus(flatIdx, colIdx, dir)
+                        }
+                      }}
+                      isFocused={isFocusedCell}
+                    />
+                  )
+                })}
+              </tr>
             )
           })}
         </>

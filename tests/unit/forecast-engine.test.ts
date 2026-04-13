@@ -118,6 +118,40 @@ describe('computeWeekSummaries', () => {
   })
 })
 
+describe('computeWeekSummaries — cascading recompute', () => {
+  it('propagates a single line edit to closing balance of all subsequent weeks', () => {
+    const periods = [
+      period('p1', '2026-03-27'),
+      period('p2', '2026-04-03'),
+      period('p3', '2026-04-10'),
+    ]
+
+    const baseLines = [
+      line('p1', -500000, 'opening'),
+      line('p1', 100000, 'inflows_ar'),
+      line('p2', 100000, 'inflows_ar'),
+      line('p3', 100000, 'inflows_ar'),
+    ]
+
+    const before = computeWeekSummaries(periods, baseLines, categories, 900000, false)
+    expect(before[0].closingBalance).toBe(-400000)
+    expect(before[1].closingBalance).toBe(-300000)
+    expect(before[2].closingBalance).toBe(-200000)
+
+    // Simulate edit: increase p1's AR by +50k — closings shift for p1, p2, p3.
+    const edited = baseLines.map((l, i) => (i === 1 ? { ...l, amount: 150000 } : l))
+
+    const after = computeWeekSummaries(periods, edited, categories, 900000, false)
+    expect(after[0].closingBalance).toBe(-350000)
+    expect(after[1].closingBalance).toBe(-250000)
+    expect(after[2].closingBalance).toBe(-150000)
+
+    // Availability (incl. OD) cascades too
+    expect(after[0].availableCash).toBe(before[0].availableCash + 50000)
+    expect(after[2].availableCash).toBe(before[2].availableCash + 50000)
+  })
+})
+
 describe('applyConfidenceWeighting', () => {
   it('multiplies amount by confidence/100', () => {
     expect(applyConfidenceWeighting(100000, 70)).toBe(70000)

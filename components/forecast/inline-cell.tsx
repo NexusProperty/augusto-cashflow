@@ -7,6 +7,20 @@ import {
   interpretKeyNotEditing,
   type Direction,
 } from './inline-cell-keys'
+import { evaluateFormula } from '@/lib/forecast/formula'
+
+type ParseResult =
+  | { ok: true; value: number }
+  | { ok: false; error: string }
+
+function parseInput(draft: string): ParseResult {
+  const trimmed = draft.trim()
+  if (!trimmed) return { ok: false, error: 'Empty' }
+  if (trimmed.startsWith('=')) return evaluateFormula(trimmed)
+  const num = parseFloat(trimmed)
+  if (isNaN(num)) return { ok: false, error: 'Not a number' }
+  return { ok: true, value: num }
+}
 
 export { interpretKeyEditing, interpretKeyNotEditing } from './inline-cell-keys'
 export type {
@@ -53,6 +67,7 @@ export const InlineCell = memo(function InlineCell({
 }: InlineCellProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  const [inputError, setInputError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const cellRef = useRef<HTMLTableCellElement>(null)
 
@@ -66,9 +81,22 @@ export const InlineCell = memo(function InlineCell({
     }
   }, [isFocused, editing])
 
-  const commitDraft = () => {
-    const num = parseFloat(draft)
-    if (!isNaN(num) && num !== value) onSave(num)
+  // Clear transient error ring after ~2s
+  useEffect(() => {
+    if (!inputError) return
+    const t = setTimeout(() => setInputError(null), 2000)
+    return () => clearTimeout(t)
+  }, [inputError])
+
+  // Returns true on successful save (or no-op), false on parse error (stay editing).
+  const commitDraft = (): boolean => {
+    const parsed = parseInput(draft)
+    if (!parsed.ok) {
+      setInputError(parsed.error)
+      return false
+    }
+    if (parsed.value !== value) onSave(parsed.value)
+    return true
   }
 
   if (isComputed) {
@@ -104,8 +132,14 @@ export const InlineCell = memo(function InlineCell({
           type="text"
           inputMode="decimal"
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          title={inputError ?? undefined}
+          onChange={(e) => {
+            setDraft(e.target.value)
+            if (inputError) setInputError(null)
+          }}
           onBlur={() => {
+            // On blur, attempt commit. If parse fails, swallow silently and exit
+            // edit mode (blur is ambiguous — user may have clicked elsewhere).
             commitDraft()
             setEditing(false)
           }}
@@ -113,16 +147,23 @@ export const InlineCell = memo(function InlineCell({
             const result = interpretKeyEditing(e)
             if (result.type === 'saveAndMove') {
               e.preventDefault()
-              commitDraft()
+              const ok = commitDraft()
+              if (!ok) return // stay in edit mode so user can fix
               setEditing(false)
               onMoveFocus?.(result.direction)
             } else if (result.type === 'cancel') {
               e.preventDefault()
               setDraft('')
+              setInputError(null)
               setEditing(false)
             }
           }}
-          className="w-full rounded border border-indigo-500 bg-white px-2 py-1 text-right text-sm text-zinc-900 shadow-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className={cn(
+            'w-full rounded border bg-white px-2 py-1 text-right text-sm text-zinc-900 shadow-sm focus:outline-none',
+            inputError
+              ? 'border-red-500 ring-2 ring-red-500 focus:ring-red-500'
+              : 'border-indigo-500 focus:ring-1 focus:ring-indigo-500',
+          )}
           autoFocus
         />
       </td>
