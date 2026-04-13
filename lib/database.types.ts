@@ -410,6 +410,7 @@ export type Database = {
           created_at: string | null
           created_by: string | null
           entity_id: string
+          formula: string | null
           id: string
           line_status: string
           notes: string | null
@@ -429,6 +430,7 @@ export type Database = {
           created_at?: string | null
           created_by?: string | null
           entity_id: string
+          formula?: string | null
           id?: string
           line_status?: string
           notes?: string | null
@@ -448,6 +450,7 @@ export type Database = {
           created_at?: string | null
           created_by?: string | null
           entity_id?: string
+          formula?: string | null
           id?: string
           line_status?: string
           notes?: string | null

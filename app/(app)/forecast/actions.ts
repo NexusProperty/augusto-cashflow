@@ -191,8 +191,7 @@ export async function updateLineAmounts(
     for (const u of withFormula) {
       const { error } = await supabase
         .from('forecast_lines')
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- formula column added by migration 023; database.types.ts not yet regenerated
-        .update({ amount: u.amount, formula: u.formula ?? null, updated_at: new Date().toISOString() } as any)
+        .update({ amount: u.amount, formula: u.formula ?? null, updated_at: new Date().toISOString() })
         .eq('id', u.id)
       if (error) {
         return {

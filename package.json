@@ -14,7 +14,8 @@
     "db:reset": "supabase db reset",
     "db:push": "supabase db push",
     "gen:types": "supabase gen types typescript --local > lib/database.types.ts",
-    "gen:types:remote": "supabase gen types typescript --linked > lib/database.types.ts"
+    "gen:types:remote": "supabase gen types typescript --linked > lib/database.types.ts",
+    "update": "npm install && npm run db:push && npm run gen:types:remote && npm run typecheck"
   },
   "dependencies": {
     "@supabase/ssr": "^0.6.1",
