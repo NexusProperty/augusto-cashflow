@@ -390,6 +390,39 @@ export async function updateForecastLinesBank(input: unknown) {
   return { ok: true as const, count: inScope.length }
 }
 
+// --- Bulk delete forecast lines (delete-row affordance on /forecast/detail) --
+
+const BulkDeleteForecastLinesSchema = z.object({
+  lineIds: z.array(z.string().uuid()).min(1).max(500),
+})
+
+/**
+ * Bulk-delete forecast lines. Used by the per-row trash affordance on
+ * /forecast/detail which can target either a single item row's lines or every
+ * line under a subtotal row. Mirrors `updateForecastLinesBank` /
+ * `renameForecastLines` in shape so the grid's optimistic / undo plumbing can
+ * reuse the same error conventions.
+ */
+export async function bulkDeleteForecastLines(input: unknown) {
+  await requireAuth()
+  const parsed = BulkDeleteForecastLinesSchema.safeParse(input)
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid input' }
+
+  const { inScope, outOfScope } = await assertForecastLinesInScope(parsed.data.lineIds)
+  if (outOfScope.length > 0) return { error: 'Some lines not in your scope' }
+  if (inScope.length === 0) return { error: 'No lines to delete' }
+
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from('forecast_lines')
+    .delete()
+    .in('id', inScope)
+
+  if (error) return { error: 'Failed to delete' }
+  revalidateForecast()
+  return { ok: true as const, count: inScope.length }
+}
+
 // --- Per-bank opening balances (migration 024) -------------------------------
 
 const UpdateBankOpeningBalanceSchema = z.object({

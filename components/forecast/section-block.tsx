@@ -114,6 +114,52 @@ function EditableLabel({
   )
 }
 
+// ── DeleteRowButton ──────────────────────────────────────────────────────────
+// Inline trash affordance shown on editable item rows and editable subtotals.
+// Uses a native confirm() for MVP — no modal dialog.
+
+function DeleteRowButton({
+  lineIds,
+  onDelete,
+}: {
+  lineIds: string[]
+  onDelete: (lineIds: string[]) => void
+}) {
+  if (lineIds.length === 0) return null
+  return (
+    <button
+      type="button"
+      aria-label="Delete row"
+      title="Delete this row and all its values"
+      onClick={(e) => {
+        e.stopPropagation()
+        if (window.confirm('Delete this row and all its values?')) {
+          onDelete(lineIds)
+        }
+      }}
+      className="ml-1.5 inline-flex items-center justify-center rounded p-0.5 text-zinc-300 hover:bg-rose-50 hover:text-rose-600 focus:text-rose-600 focus:outline-none"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="h-3.5 w-3.5"
+        aria-hidden="true"
+      >
+        <path d="M3 6h18" />
+        <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+        <path d="M10 11v6" />
+        <path d="M14 11v6" />
+      </svg>
+    </button>
+  )
+}
+
 // ── SectionBlock ─────────────────────────────────────────────────────────────
 
 export const SectionBlock = memo(function SectionBlock({
@@ -153,6 +199,7 @@ export const SectionBlock = memo(function SectionBlock({
   onRenameItem,
   onAddLine,
   onRowBankCommit,
+  onDeleteRow,
 }: {
   section: Category
   categories: Category[]
@@ -211,6 +258,11 @@ export const SectionBlock = memo(function SectionBlock({
   onAddLine?: (subCategoryIds: string[]) => void
   /** Reassign every line in an item row to a new bank account. */
   onRowBankCommit?: (lineIds: string[], bankAccountId: string) => void
+  /**
+   * Delete every line in a row (item row, or all lines under a subtotal).
+   * When undefined, the delete affordance is hidden.
+   */
+  onDeleteRow?: (lineIds: string[]) => void
 }) {
   const style = getSectionStyle(section.flowDirection)
 
@@ -235,6 +287,19 @@ export const SectionBlock = memo(function SectionBlock({
     () => buildItemRows(section, sectionChildren, categories, lines),
     [section, sectionChildren, categories, lines],
   )
+
+  // Per-subtotal sub-line lookup, keyed by subtotal flatRow's subId. Lets the
+  // subtotal render branch grab all underlying lines without rescanning the
+  // full lines array every render.
+  const subLinesBySubId = useMemo(() => {
+    const map = new Map<string, ForecastLine[]>()
+    for (const fr of flatRows) {
+      if (fr.kind !== 'subtotal' || fr.sectionId !== section.id) continue
+      const idSet = new Set(fr.subCategoryIds)
+      map.set(fr.subId, sectionLines.filter((l) => idSet.has(l.categoryId)))
+    }
+    return map
+  }, [flatRows, section.id, sectionLines])
 
   const emptyKeys = useMemo(() => {
     const keys = new Set<string>()
@@ -481,9 +546,25 @@ export const SectionBlock = memo(function SectionBlock({
             if (fr.kind === 'subtotal') {
               const sub = sectionChildren.find((c) => c.id === fr.subId)
               if (!sub) return null
-              const subCategoryIdSet = new Set(fr.subCategoryIds)
-              const subLines = sectionLines.filter((l) => subCategoryIdSet.has(l.categoryId))
+              const subLines = subLinesBySubId.get(fr.subId) ?? []
               const hasEditable = fr.editable
+
+              // First underlying line's bank id drives the chip's "current"
+              // selection. Picking reassigns EVERY line in the sub.
+              const subCurrentBankId = subLines[0]?.bankAccountId ?? null
+              const subLineIds = subLines.map((l) => l.id)
+              const allSubLinesPipeline =
+                subLines.length > 0 && subLines.every((l) => l.source === 'pipeline')
+              const showSubBankChip =
+                hasEditable &&
+                mainBanksInOrder.length > 0 &&
+                Boolean(onRowBankCommit) &&
+                subLines.length > 0
+              const showSubDelete =
+                hasEditable &&
+                Boolean(onDeleteRow) &&
+                subLines.length > 0 &&
+                !allSubLinesPipeline
 
               const periodTotals = periods.map((p) =>
                 subLines.filter((l) => l.periodId === p.id).reduce((sum, l) => sum + l.amount, 0),
@@ -495,7 +576,17 @@ export const SectionBlock = memo(function SectionBlock({
                   className="bg-zinc-50/50 font-medium border-t border-zinc-100 text-zinc-600"
                 >
                   <td className="sticky left-0 z-10 bg-inherit whitespace-nowrap py-1.5 pr-4 text-sm pl-6">
-                    {sub.sectionNumber ? `${sub.sectionNumber}. ${sub.name}` : sub.name}
+                    <span>{sub.sectionNumber ? `${sub.sectionNumber}. ${sub.name}` : sub.name}</span>
+                    {showSubBankChip && (
+                      <BankChip
+                        currentBankId={subCurrentBankId}
+                        banks={mainBanksInOrder}
+                        onPick={(bankId) => onRowBankCommit!(subLineIds, bankId)}
+                      />
+                    )}
+                    {showSubDelete && (
+                      <DeleteRowButton lineIds={subLineIds} onDelete={onDeleteRow!} />
+                    )}
                   </td>
                   {periods.map((p, colIdx) => {
                     const total = periodTotals[colIdx] ?? 0
@@ -700,6 +791,9 @@ export const SectionBlock = memo(function SectionBlock({
                       banks={mainBanksInOrder}
                       onPick={(bankId) => onRowBankCommit(fr.lineIds, bankId)}
                     />
+                  )}
+                  {onDeleteRow && (
+                    <DeleteRowButton lineIds={fr.lineIds} onDelete={onDeleteRow} />
                   )}
                   {isOverridden && (
                     <span

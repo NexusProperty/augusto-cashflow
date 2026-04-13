@@ -69,6 +69,14 @@ export interface UseForecastUndoDeps {
     lineIds: string[],
     bankAccountId: string,
   ) => Promise<{ ok: true } | { error: string }>
+  /**
+   * Called for `row-delete` redo (and for re-delete after a row-delete undo
+   * is itself redone). Deletes every line in `lineIds` via
+   * `bulkDeleteForecastLines` and patches local state.
+   */
+  onReplayRowDelete?: (
+    lineIds: string[],
+  ) => Promise<{ ok: true } | { error: string }>
 }
 
 // ── Hook return ───────────────────────────────────────────────────────────────
@@ -98,6 +106,7 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
     onReplayBulkAdd,
     onReplayBankOpening,
     onReplayBankReassign,
+    onReplayRowDelete,
   } = deps
 
   // ── Stack + guard refs ────────────────────────────────────────────────────
@@ -234,6 +243,35 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
             return
           }
         }
+      } else if (entry.kind === 'row-delete') {
+        // Undo a row delete = re-insert the captured line payloads.
+        const rows: BulkAddRow[] = entry.deletedLines.map((l) => ({
+          entityId: l.entityId,
+          categoryId: l.categoryId,
+          periodId: l.periodId,
+          amount: l.amount,
+          confidence: l.confidence,
+          counterparty: l.counterparty,
+          notes: l.notes,
+          lineStatus: l.lineStatus,
+          source: l.source,
+        }))
+        const result = await onReplayBulkAdd(rows)
+        if ('error' in result) {
+          markError(result.error)
+          return
+        }
+        setLocalLines((cur) => [...cur, ...result.data])
+        // The new line ids differ from the originals; rewrite the redo entry
+        // so a subsequent redo targets the freshly inserted rows.
+        undoStackRef.current.pushRedo({
+          kind: 'row-delete',
+          deletedLines: result.data,
+          label: entry.label,
+          scenarioId: entry.scenarioId,
+        })
+        markUndone()
+        return
       } else if (entry.kind === 'compound') {
         // Delegate to each sub-entry's existing replay path in order.
         // isReplayingRef is already true so sub-entry replays won't push
@@ -311,7 +349,7 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
     } finally {
       isReplayingRef.current = false
     }
-  }, [scenarioId, onReplayAmounts, onReplayStatus, onReplayDelete, onReplayBulkAdd, onReplayBankOpening, onReplayBankReassign, setLocalLines, localLinesRef, markError, markUndone])
+  }, [scenarioId, onReplayAmounts, onReplayStatus, onReplayDelete, onReplayBulkAdd, onReplayBankOpening, onReplayBankReassign, onReplayRowDelete, setLocalLines, localLinesRef, markError, markUndone])
 
   // ── replayRedo ────────────────────────────────────────────────────────────
 
@@ -381,6 +419,19 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
           markError(res.error)
           return
         }
+      } else if (entry.kind === 'row-delete') {
+        if (!onReplayRowDelete) {
+          markError('Redo not supported in this view')
+          return
+        }
+        const lineIds = entry.deletedLines.map((l) => l.id)
+        const res = await onReplayRowDelete(lineIds)
+        if ('error' in res) {
+          markError(res.error)
+          return
+        }
+        const idSet = new Set(lineIds)
+        setLocalLines((cur) => cur.filter((l) => !idSet.has(l.id)))
       } else if (entry.kind === 'compound') {
         // Replay forward: each sub-entry's redo path, in order.
         //
@@ -460,7 +511,7 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
     } finally {
       isReplayingRef.current = false
     }
-  }, [scenarioId, onReplayAmounts, onReplayStatus, onReplayDelete, onReplayBulkAdd, onReplayBankOpening, onReplayBankReassign, setLocalLines, markError, markRedone])
+  }, [scenarioId, onReplayAmounts, onReplayStatus, onReplayDelete, onReplayBulkAdd, onReplayBankOpening, onReplayBankReassign, onReplayRowDelete, setLocalLines, markError, markRedone])
 
   return {
     undoStackRef,

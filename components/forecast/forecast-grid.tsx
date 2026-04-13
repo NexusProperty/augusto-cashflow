@@ -46,7 +46,7 @@ import { evaluateFormula, type EvalContext } from '@/lib/forecast/formula'
 import { buildCsv } from '@/lib/forecast/export'
 import { FindBar } from './find-bar'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
-import { updateBankOpeningBalance, updateGroupOdFacilityLimit, updateForecastLinesBank } from '@/app/(app)/forecast/actions'
+import { updateBankOpeningBalance, updateGroupOdFacilityLimit, updateForecastLinesBank, bulkDeleteForecastLines } from '@/app/(app)/forecast/actions'
 import { OdFacilityLimitEditor } from '@/components/forecast/od-facility-limit-editor'
 import type { BankAccount, ForecastLine, LineStatus, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
@@ -1530,6 +1530,11 @@ export function ForecastGrid({
       if (res && 'error' in res) return { error: res.error ?? 'Reassign failed' }
       return { ok: true }
     },
+    onReplayRowDelete: async (lineIds) => {
+      const res = await bulkDeleteForecastLines({ lineIds })
+      if (res && 'error' in res) return { error: res.error ?? 'Delete failed' }
+      return { ok: true }
+    },
   })
 
   // ── Per-bank opening balance commit (Section 1 week-1 edit) ────────────────
@@ -1629,6 +1634,50 @@ export function ForecastGrid({
             if (res && 'error' in res) {
               revert()
               markError(res.error ?? 'Reassign failed')
+            } else {
+              markSaved()
+            }
+          })
+          .catch((err: unknown) => {
+            revert()
+            markError(err instanceof Error ? err.message : 'Network error')
+          })
+      })
+    },
+    [scenarioId, isReplayingRef, undoStackRef, setLocalLines, localLinesRef, startTransition, markError, markSaved],
+  )
+
+  // ── Delete a whole row (item row or every line under a subtotal) ─────────
+  // Snapshot the full ForecastLine payloads for undo, optimistically drop them
+  // from localLines, then fire the server action. Reverts on error.
+  const handleDeleteRow = useCallback(
+    (lineIds: string[]) => {
+      if (lineIds.length === 0) return
+      const idSet = new Set(lineIds)
+      const snapshot = localLinesRef.current.filter((l) => idSet.has(l.id))
+      if (snapshot.length === 0) return
+
+      setLocalLines((prev) => prev.filter((l) => !idSet.has(l.id)))
+
+      if (!isReplayingRef.current) {
+        undoStackRef.current.push({
+          kind: 'row-delete',
+          deletedLines: snapshot,
+          label: snapshot.length === 1 ? 'Delete row' : `Delete ${snapshot.length} lines`,
+          scenarioId: scenarioId ?? null,
+        })
+      }
+
+      const revert = () => {
+        setLocalLines((prev) => [...prev, ...snapshot])
+      }
+
+      startTransition(() => {
+        bulkDeleteForecastLines({ lineIds })
+          .then((res) => {
+            if (res && 'error' in res) {
+              revert()
+              markError(res.error ?? 'Delete failed')
             } else {
               markSaved()
             }
@@ -2912,6 +2961,7 @@ export function ForecastGrid({
                 onRenameItem={handleRenameItem}
                 onAddLine={handleAddLine}
                 onRowBankCommit={handleRowBankCommit}
+                onDeleteRow={handleDeleteRow}
               />
             ))}
 

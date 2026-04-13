@@ -69,6 +69,19 @@ export type AtomicUndoEntry =
       label: string
       scenarioId: string | null
     }
+  | {
+      /**
+       * Delete a whole row (one or more forecast_lines). Produced by the
+       * per-row trash button on /forecast/detail. On undo replay, the captured
+       * full line payloads are re-inserted via `bulkAddForecastLines`. On
+       * redo replay, the current line ids are deleted again via
+       * `bulkDeleteForecastLines`.
+       */
+      kind: 'row-delete'
+      deletedLines: ForecastLine[]
+      label: string
+      scenarioId: string | null
+    }
 
 export type UndoEntry =
   | AtomicUndoEntry
