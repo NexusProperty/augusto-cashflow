@@ -41,6 +41,73 @@ import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
 import type { ForecastLine, LineStatus, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
 
+// ── Freeze-columns hook ───────────────────────────────────────────────────────
+// Persists the user's choice to localStorage['forecast.freezeCount'].
+// On viewports narrower than 1280px the effective freeze count is forced to 0
+// (the sticky offsets are hardcoded in px and break on narrow screens).
+function useFreezeCount(): [number, (n: number) => void, boolean] {
+  const [freezeCount, setFreezeCount] = useState<number>(() => {
+    if (typeof window === 'undefined') return 0
+    const raw = window.localStorage.getItem('forecast.freezeCount')
+    const n = raw ? parseInt(raw, 10) : 0
+    return n === 1 || n === 2 ? n : 0
+  })
+
+  const [isNarrow, setIsNarrow] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.matchMedia('(max-width: 1279px)').matches
+  })
+
+  useEffect(() => {
+    const mql = window.matchMedia('(max-width: 1279px)')
+    const onChange = (e: MediaQueryListEvent) => setIsNarrow(e.matches)
+    mql.addEventListener('change', onChange)
+    return () => mql.removeEventListener('change', onChange)
+  }, [])
+
+  const update = useCallback((n: number) => {
+    setFreezeCount(n)
+    try { window.localStorage.setItem('forecast.freezeCount', String(n)) } catch { /* storage full or disabled */ }
+  }, [])
+
+  const effective = isNarrow ? 0 : freezeCount
+  return [effective, update, isNarrow]
+}
+
+// ── Freeze-columns style helper ───────────────────────────────────────────────
+// Hardcoded: 280px for the label column + 100px per week column (approximation).
+// Chosen for simplicity — actual week columns are right-aligned numeric cells
+// that tend to be ~100px wide. If visual gaps appear, switch to measured widths.
+function freezeCellStyle(colIdx: number, freezeCount: number): { sticky: boolean; left: number } {
+  if (colIdx >= freezeCount) return { sticky: false, left: 0 }
+  return { sticky: true, left: 280 + 100 * colIdx }
+}
+
+// ── FreezePicker control ──────────────────────────────────────────────────────
+function FreezePicker({
+  freezeCount,
+  onChange,
+  disabled,
+}: {
+  freezeCount: number
+  onChange: (n: number) => void
+  disabled: boolean
+}) {
+  return (
+    <select
+      value={String(freezeCount)}
+      onChange={(e) => onChange(parseInt(e.target.value, 10))}
+      disabled={disabled}
+      title={disabled ? 'Disabled on narrow screens — widen the window to use freeze columns' : 'Freeze the first N week columns during horizontal scroll'}
+      className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:text-zinc-400"
+    >
+      <option value="0">Freeze: Off</option>
+      <option value="1">Freeze: 1 week</option>
+      <option value="2">Freeze: 2 weeks</option>
+    </select>
+  )
+}
+
 interface ForecastGridProps {
   periods: Period[]
   categories: Category[]
@@ -67,6 +134,9 @@ export function ForecastGrid({
   scenarioId = null,
 }: ForecastGridProps) {
   const [isPending, startTransition] = useTransition()
+
+  // ── Freeze columns ────────────────────────────────────────────────────────
+  const [freezeCount, setFreezeCount, isNarrowScreen] = useFreezeCount()
 
   // ── Save status indicator (Saving / Saved / Undone / Redone / Error) ────────
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'undone' | 'redone' | 'error'>('idle')
@@ -2053,6 +2123,11 @@ export function ForecastGrid({
             onPick={handleSetStatus}
             selectedCount={selectedCellKeys.size}
           />
+          <FreezePicker
+            freezeCount={freezeCount}
+            onChange={setFreezeCount}
+            disabled={isNarrowScreen}
+          />
           {/* Shift… button + inline popover */}
           <div className="relative">
             <button
@@ -2144,11 +2219,21 @@ export function ForecastGrid({
               <th className="sticky left-0 z-20 min-w-[280px] bg-zinc-50 px-3 py-2.5 text-left text-xs font-medium text-zinc-500">
                 Item / Description
               </th>
-              {periods.map((p) => (
-                <th key={p.id} className="bg-zinc-50 px-2.5 py-2.5 text-right text-xs font-medium text-zinc-500">
-                  {weekEndingLabel(new Date(p.weekEnding))}
-                </th>
-              ))}
+              {periods.map((p, colIdx) => {
+                const { sticky, left } = freezeCellStyle(colIdx, freezeCount)
+                return (
+                  <th
+                    key={p.id}
+                    className={cn(
+                      'bg-zinc-50 px-2.5 py-2.5 text-right text-xs font-medium text-zinc-500',
+                      sticky && 'sticky z-[15]',
+                    )}
+                    style={sticky ? { left } : undefined}
+                  >
+                    {weekEndingLabel(new Date(p.weekEnding))}
+                  </th>
+                )
+              })}
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100">
@@ -2179,18 +2264,25 @@ export function ForecastGrid({
                 onCellCreate={handleEmptyCellCreate}
                 filterRowSet={filterRowSet}
                 highlightCell={highlightCell}
+                freezeCount={freezeCount}
               />
             ))}
 
             {/* Net Operating */}
             <tr className="border-t-2 border-zinc-300 bg-zinc-50 font-semibold">
               <td className="sticky left-0 z-10 bg-zinc-50 px-3 py-2 text-sm text-zinc-900">Net Operating Cash Flow</td>
-              {periods.map((p) => {
+              {periods.map((p, colIdx) => {
                 const s = summaryMap.get(p.id)
+                const { sticky, left } = freezeCellStyle(colIdx, freezeCount)
                 return (
                   <td
                     key={p.id}
-                    className={`px-2.5 py-2 text-right text-sm tabular-nums ${s && s.netOperating < 0 ? 'text-red-600' : 'text-zinc-900'}`}
+                    className={cn(
+                      'px-2.5 py-2 text-right text-sm tabular-nums',
+                      s && s.netOperating < 0 ? 'text-red-600' : 'text-zinc-900',
+                      sticky && 'sticky z-[15] bg-zinc-50',
+                    )}
+                    style={sticky ? { left } : undefined}
                   >
                     {s ? formatCurrency(s.netOperating) : '—'}
                   </td>
@@ -2201,12 +2293,19 @@ export function ForecastGrid({
             {/* Closing Balance */}
             <tr className="border-t border-zinc-200 bg-zinc-900 font-bold text-white">
               <td className="sticky left-0 z-10 bg-zinc-900 px-3 py-2.5 text-sm">Closing Balance</td>
-              {periods.map((p) => {
+              {periods.map((p, colIdx) => {
                 const s = summaryMap.get(p.id)
+                const { sticky, left } = freezeCellStyle(colIdx, freezeCount)
                 return (
                   <td
                     key={p.id}
-                    className={`px-2.5 py-2.5 text-right text-sm tabular-nums font-bold ${s && s.closingBalance < 0 ? 'text-red-400' : 'text-white'}`}
+                    className={cn(
+                      'px-2.5 py-2.5 text-right text-sm tabular-nums font-bold',
+                      s && s.closingBalance < 0 ? 'text-red-400' : 'text-white',
+                      // Explicit bg-zinc-900 so frozen cell blocks scrolling content behind it
+                      sticky && 'sticky z-[15] bg-zinc-900',
+                    )}
+                    style={sticky ? { left } : undefined}
                   >
                     {s ? formatCurrency(s.closingBalance) : '—'}
                   </td>
@@ -2217,12 +2316,18 @@ export function ForecastGrid({
             {/* Available Cash */}
             <tr className="border-t border-zinc-200">
               <td className="sticky left-0 z-10 bg-white px-3 py-1.5 text-sm text-zinc-600">Available Cash (incl. OD)</td>
-              {periods.map((p) => {
+              {periods.map((p, colIdx) => {
                 const s = summaryMap.get(p.id)
+                const { sticky, left } = freezeCellStyle(colIdx, freezeCount)
                 return (
                   <td
                     key={p.id}
-                    className={`px-2.5 py-1.5 text-right text-sm tabular-nums ${s && s.availableCash < 0 ? 'text-red-600 font-semibold' : 'text-emerald-600'}`}
+                    className={cn(
+                      'px-2.5 py-1.5 text-right text-sm tabular-nums',
+                      s && s.availableCash < 0 ? 'text-red-600 font-semibold' : 'text-emerald-600',
+                      sticky && 'sticky z-[15] bg-white',
+                    )}
+                    style={sticky ? { left } : undefined}
                   >
                     {s ? formatCurrency(s.availableCash) : '—'}
                   </td>
@@ -2233,11 +2338,19 @@ export function ForecastGrid({
             {/* OD Status — badge pills */}
             <tr className="border-t border-zinc-100">
               <td className="sticky left-0 z-10 bg-white px-3 py-1.5 text-sm text-zinc-500">OD Status</td>
-              {periods.map((p) => {
+              {periods.map((p, colIdx) => {
                 const s = summaryMap.get(p.id)
                 const isOverdrawn = s?.isOverdrawn ?? false
+                const { sticky, left } = freezeCellStyle(colIdx, freezeCount)
                 return (
-                  <td key={p.id} className="px-2.5 py-1.5 text-right tabular-nums">
+                  <td
+                    key={p.id}
+                    className={cn(
+                      'px-2.5 py-1.5 text-right tabular-nums',
+                      sticky && 'sticky z-[15] bg-white',
+                    )}
+                    style={sticky ? { left } : undefined}
+                  >
                     {s ? (
                       <span
                         className={cn(
@@ -2484,6 +2597,7 @@ const SectionBlock = memo(function SectionBlock({
   onFillDoubleClick,
   filterRowSet,
   highlightCell,
+  freezeCount = 0,
 }: {
   section: Category
   categories: Category[]
@@ -2511,6 +2625,8 @@ const SectionBlock = memo(function SectionBlock({
   filterRowSet?: Set<number> | null
   /** Flat-row index + col of the currently highlighted find match (500 ms flash). */
   highlightCell?: { row: number; col: number } | null
+  /** Number of week columns to freeze (0 = off). Propagated from ForecastGrid. */
+  freezeCount?: number
 }) {
   const style = getSectionStyle(section.flowDirection)
 
@@ -2602,14 +2718,22 @@ const SectionBlock = memo(function SectionBlock({
             )}
           </div>
         </td>
-        {sectionTotals.map((total, i) => (
-          <td
-            key={periods[i]!.id}
-            className={cn('px-2.5 py-2 text-right text-xs font-semibold tabular-nums', style.totalColor)}
-          >
-            {total !== 0 ? formatCurrency(total) : '—'}
-          </td>
-        ))}
+        {sectionTotals.map((total, i) => {
+          const { sticky, left } = freezeCellStyle(i, freezeCount)
+          return (
+            <td
+              key={periods[i]!.id}
+              className={cn(
+                'px-2.5 py-2 text-right text-xs font-semibold tabular-nums',
+                style.totalColor,
+                sticky && cn('sticky z-[15]', style.stickyBg),
+              )}
+              style={sticky ? { left } : undefined}
+            >
+              {total !== 0 ? formatCurrency(total) : '—'}
+            </td>
+          )
+        })}
       </tr>
 
       {/* Sub-section subtotal rows + data rows — only when not collapsed */}
@@ -2645,6 +2769,10 @@ const SectionBlock = memo(function SectionBlock({
                   const total = periodTotals[colIdx] ?? 0
                   const isFocusedCell =
                     focus !== null && focus.row === flatIdx && focus.col === colIdx
+                  const { sticky, left } = freezeCellStyle(colIdx, freezeCount)
+                  const stickyLeft = sticky ? left : undefined
+                  // Frozen subtotal cells need an opaque bg (row is bg-zinc-50/50 = semi-transparent).
+                  const frozenSubtotalCls = sticky ? 'bg-zinc-50' : undefined
                   if (!hasEditable) {
                     return (
                       <InlineCell
@@ -2657,6 +2785,8 @@ const SectionBlock = memo(function SectionBlock({
                         isFocused={isFocusedCell}
                         rowIdx={flatIdx}
                         colIdx={colIdx}
+                        stickyLeft={stickyLeft}
+                        className={frozenSubtotalCls}
                       />
                     )
                   }
@@ -2671,6 +2801,8 @@ const SectionBlock = memo(function SectionBlock({
                       isFocused={isFocusedCell}
                       rowIdx={flatIdx}
                       colIdx={colIdx}
+                      stickyLeft={stickyLeft}
+                      className={frozenSubtotalCls}
                     />
                   )
                 })}
@@ -2704,6 +2836,7 @@ const SectionBlock = memo(function SectionBlock({
                   confidence={line.confidence}
                   lineStatus={line.lineStatus}
                   readOnlyCells
+                  freezeCount={freezeCount}
                   badge={
                     <>
                       <Badge variant="pipeline" className="ml-1.5">
@@ -2779,6 +2912,8 @@ const SectionBlock = memo(function SectionBlock({
                     highlightCell !== undefined &&
                     highlightCell.row === flatIdx &&
                     highlightCell.col === colIdx
+                  const { sticky: cellSticky, left: cellLeft } = freezeCellStyle(colIdx, freezeCount)
+                  const stickyLeft = cellSticky ? cellLeft : undefined
                   return (
                     <InlineCell
                       key={p.id}
@@ -2816,6 +2951,7 @@ const SectionBlock = memo(function SectionBlock({
                       onFillDoubleClick={onFillDoubleClick}
                       isFindHighlight={isFindHighlight}
                       note={cellLine?.notes}
+                      stickyLeft={stickyLeft}
                     />
                   )
                 })}

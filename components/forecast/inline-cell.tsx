@@ -72,6 +72,11 @@ interface InlineCellProps {
   isFindHighlight?: boolean
   /** Optional note from forecast_lines.notes — renders an amber dot indicator. */
   note?: string | null
+  /**
+   * When set, the cell becomes position:sticky with this left offset (px).
+   * Used for the freeze-columns feature. Hardcoded: 280px label + 100px per week col.
+   */
+  stickyLeft?: number
 }
 
 function FillHandle({
@@ -119,6 +124,7 @@ export const InlineCell = memo(function InlineCell({
   onFillDoubleClick,
   isFindHighlight,
   note,
+  stickyLeft,
 }: InlineCellProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -168,8 +174,10 @@ export const InlineCell = memo(function InlineCell({
           isFocused && 'ring-2 ring-indigo-500',
           isFillPreview && 'outline outline-2 outline-dashed outline-indigo-400 -outline-offset-2',
           isFindHighlight && 'ring-2 ring-yellow-400',
+          stickyLeft !== undefined && 'sticky z-[15]',
           className,
         )}
+        style={stickyLeft !== undefined ? { left: stickyLeft } : undefined}
         onKeyDown={(e) => {
           // Read-only cells still support navigation.
           const result = interpretKeyNotEditing(e)
@@ -196,7 +204,12 @@ export const InlineCell = memo(function InlineCell({
 
   if (editing) {
     return (
-      <td data-row={rowIdx} data-col={colIdx} className={cn('px-1 py-1', className)}>
+      <td
+        data-row={rowIdx}
+        data-col={colIdx}
+        className={cn('px-1 py-1', stickyLeft !== undefined && 'sticky z-[15]', className)}
+        style={stickyLeft !== undefined ? { left: stickyLeft } : undefined}
+      >
         <input
           ref={inputRef}
           type="text"
@@ -240,7 +253,11 @@ export const InlineCell = memo(function InlineCell({
     )
   }
 
+  // For frozen cells (stickyLeft defined) we need an opaque background so the
+  // cell blocks scrolling content behind it. Apply bg-white as the base; status
+  // colours are still applied on top via the statusBg classes.
   const statusBg = value !== 0 ? statusStyles[lineStatus ?? 'none'] : 'hover:bg-zinc-50'
+  const frozenBg = stickyLeft !== undefined ? 'bg-white' : undefined
 
   const enterEdit = (initialDraft?: string) => {
     setDraft(initialDraft ?? String(value))
@@ -255,6 +272,7 @@ export const InlineCell = memo(function InlineCell({
       data-col={colIdx}
       className={cn(
         'relative cursor-text px-2.5 py-1.5 text-right text-sm tabular-nums outline-none',
+        frozenBg,
         statusBg,
         isNegative && 'text-red-600',
         value === 0 && 'text-zinc-400',
@@ -262,8 +280,10 @@ export const InlineCell = memo(function InlineCell({
         isFocused && 'ring-2 ring-indigo-500',
         isFillPreview && 'outline outline-2 outline-dashed outline-indigo-400 -outline-offset-2',
         isFindHighlight && 'ring-2 ring-yellow-400',
+        stickyLeft !== undefined && 'sticky z-[15]',
         className,
       )}
+      style={stickyLeft !== undefined ? { left: stickyLeft } : undefined}
       onClick={(e) => {
         // Modifier-clicks are for selection (grid mousedown handles them).
         if (e.ctrlKey || e.metaKey || e.shiftKey) return

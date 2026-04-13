@@ -18,6 +18,8 @@ interface ForecastRowProps {
   title?: string
   readOnlyCells?: boolean
   lineStatus?: LineStatus | null
+  /** Number of week columns to freeze (0 = off). Passed from ForecastGrid. */
+  freezeCount?: number
 }
 
 const depthStyles: Record<number, string> = {
@@ -44,7 +46,7 @@ const statusBadgeConfig: Record<string, { label: string; classes: string }> = {
 }
 
 export const ForecastRow = memo(function ForecastRow({
-  label, lines, periods, depth, isSubtotal, isTotal, isComputed, source, confidence, onCellSave, badge, title, readOnlyCells, lineStatus,
+  label, lines, periods, depth, isSubtotal, isTotal, isComputed, source, confidence, onCellSave, badge, title, readOnlyCells, lineStatus, freezeCount = 0,
 }: ForecastRowProps) {
   const rowClass = cn(
     isTotal && 'bg-zinc-900 text-white font-bold border-t-2 border-zinc-300',
@@ -74,9 +76,12 @@ export const ForecastRow = memo(function ForecastRow({
           <span className="ml-1.5 text-xs text-amber-600">{confidence}%</span>
         )}
       </td>
-      {periods.map((p) => {
+      {periods.map((p, colIdx) => {
         const line = lines.get(p.id)
         const amount = line?.amount ?? 0
+        // Freeze-columns: sticky left offset for the first freezeCount week cols.
+        // Hardcoded: 280px label + 100px per week col (approx; see forecast-grid.tsx).
+        const stickyLeft = colIdx < freezeCount ? 280 + 100 * colIdx : undefined
 
         return (
           <InlineCell
@@ -86,6 +91,8 @@ export const ForecastRow = memo(function ForecastRow({
             isComputed={isComputed || isSubtotal || isTotal || depth === 0 || readOnlyCells}
             lineStatus={line?.lineStatus}
             onSave={(newAmount) => onCellSave?.(p.id, newAmount)}
+            colIdx={colIdx}
+            stickyLeft={stickyLeft}
           />
         )
       })}
