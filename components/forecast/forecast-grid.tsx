@@ -2528,6 +2528,7 @@ const SectionBlock = memo(function SectionBlock({
                       onFillStart={onFillStart}
                       onFillDoubleClick={onFillDoubleClick}
                       isFindHighlight={isFindHighlight}
+                      note={cellLine?.notes}
                     />
                   )
                 })}

@@ -70,6 +70,8 @@ interface InlineCellProps {
   onFillDoubleClick?: (e: React.MouseEvent) => void
   /** True when this cell is the current Find match — renders a yellow ring flash. */
   isFindHighlight?: boolean
+  /** Optional note from forecast_lines.notes — renders an amber dot indicator. */
+  note?: string | null
 }
 
 function FillHandle({
@@ -116,6 +118,7 @@ export const InlineCell = memo(function InlineCell({
   onFillStart,
   onFillDoubleClick,
   isFindHighlight,
+  note,
 }: InlineCellProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -179,6 +182,13 @@ export const InlineCell = memo(function InlineCell({
         {formatCurrency(value)}
         {showFillHandle && (
           <FillHandle onFillStart={onFillStart} onFillDoubleClick={onFillDoubleClick} />
+        )}
+        {note && (
+          <span
+            title={note}
+            aria-label="Has note"
+            className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-amber-500 ring-1 ring-white pointer-events-none"
+          />
         )}
       </td>
     )
@@ -286,6 +296,13 @@ export const InlineCell = memo(function InlineCell({
       {value === 0 ? '—' : formatCurrency(value)}
       {showFillHandle && (
         <FillHandle onFillStart={onFillStart} onFillDoubleClick={onFillDoubleClick} />
+      )}
+      {note && (
+        <span
+          title={note}
+          aria-label="Has note"
+          className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-amber-500 ring-1 ring-white pointer-events-none"
+        />
       )}
     </td>
   )
