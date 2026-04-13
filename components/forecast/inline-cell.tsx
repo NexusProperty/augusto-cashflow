@@ -66,6 +66,33 @@ interface InlineCellProps {
   showFillHandle?: boolean
   /** Called on mousedown of the fill handle to start a fill-drag. */
   onFillStart?: (e: React.MouseEvent) => void
+  /** Called on double-click of the fill handle to auto-fill downward. */
+  onFillDoubleClick?: (e: React.MouseEvent) => void
+}
+
+function FillHandle({
+  onFillStart,
+  onFillDoubleClick,
+}: {
+  onFillStart?: (e: React.MouseEvent) => void
+  onFillDoubleClick?: (e: React.MouseEvent) => void
+}) {
+  return (
+    <span
+      data-fill-handle="true"
+      onMouseDown={(e) => {
+        e.stopPropagation()
+        e.preventDefault()
+        onFillStart?.(e)
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation()
+        e.preventDefault()
+        onFillDoubleClick?.(e)
+      }}
+      className="absolute -bottom-[3px] -right-[3px] z-30 h-[7px] w-[7px] cursor-crosshair rounded-sm bg-indigo-600 ring-1 ring-white"
+    />
+  )
 }
 
 export const InlineCell = memo(function InlineCell({
@@ -85,6 +112,7 @@ export const InlineCell = memo(function InlineCell({
   isFillPreview,
   showFillHandle,
   onFillStart,
+  onFillDoubleClick,
 }: InlineCellProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -146,15 +174,7 @@ export const InlineCell = memo(function InlineCell({
       >
         {formatCurrency(value)}
         {showFillHandle && (
-          <span
-            data-fill-handle="true"
-            onMouseDown={(e) => {
-              e.stopPropagation()
-              e.preventDefault()
-              onFillStart?.(e)
-            }}
-            className="absolute -bottom-[3px] -right-[3px] z-30 h-[7px] w-[7px] cursor-crosshair rounded-sm bg-indigo-600 ring-1 ring-white"
-          />
+          <FillHandle onFillStart={onFillStart} onFillDoubleClick={onFillDoubleClick} />
         )}
       </td>
     )
@@ -260,15 +280,7 @@ export const InlineCell = memo(function InlineCell({
     >
       {value === 0 ? '—' : formatCurrency(value)}
       {showFillHandle && (
-        <span
-          data-fill-handle="true"
-          onMouseDown={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-            onFillStart?.(e)
-          }}
-          className="absolute -bottom-[3px] -right-[3px] z-30 h-[7px] w-[7px] cursor-crosshair rounded-sm bg-indigo-600 ring-1 ring-white"
-        />
+        <FillHandle onFillStart={onFillStart} onFillDoubleClick={onFillDoubleClick} />
       )}
     </td>
   )

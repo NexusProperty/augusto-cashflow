@@ -32,7 +32,7 @@ import {
   type Selection,
 } from '@/lib/forecast/selection'
 import { toTSV, parseTSV, parseClipboardNumber } from '@/lib/forecast/clipboard'
-import { computeFillHandleRange, isInFillRange } from '@/lib/forecast/fill-handle'
+import { computeFillHandleRange, isInFillRange, detectPattern, materialisePattern } from '@/lib/forecast/fill-handle'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
 import type { ForecastLine, LineStatus, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
@@ -520,6 +520,98 @@ export function ForecastGrid({
     setFillPreviewRange({ ...range })
   }, [range])
 
+  /** Shared commit logic used by both drag-release and double-click fill. */
+  const commitFillRange = useCallback(
+    (
+      source: { rowStart: number; rowEnd: number; colStart: number; colEnd: number },
+      targetCells: Array<{ row: number; col: number }>,
+      previewRange: { rowStart: number; rowEnd: number; colStart: number; colEnd: number },
+    ) => {
+      const sourceCells: Array<{ row: number; col: number; amount: number }> = []
+      for (let r = source.rowStart; r <= source.rowEnd; r++) {
+        for (let c = source.colStart; c <= source.colEnd; c++) {
+          const fr = flatRows[r]
+          const p = periods[c]
+          let amount = 0
+          if (fr && fr.kind === 'item' && p) {
+            amount = fr.lineByPeriod.get(p.id)?.amount ?? 0
+          }
+          sourceCells.push({ row: r, col: c, amount })
+        }
+      }
+      const fillPattern = detectPattern(sourceCells)
+      const fillValues = materialisePattern(fillPattern, targetCells.length)
+
+      const updates: Array<{ id: string; amount: number }> = []
+      let skippedPipeline = 0
+      let skippedNoLine = 0
+      let skippedNonItem = 0
+      let targetIdx = 0
+      for (const { row, col } of targetCells) {
+        const value = fillValues[targetIdx++] ?? 0
+        const fr = flatRows[row]
+        const p = periods[col]
+        if (!fr || !p) continue
+        if (fr.kind !== 'item') { skippedNonItem++; continue }
+        if (fr.isPipeline) { skippedPipeline++; continue }
+        const line = fr.lineByPeriod.get(p.id)
+        if (!line) { skippedNoLine++; continue }
+        if (line.source === 'pipeline') { skippedPipeline++; continue }
+        updates.push({ id: line.id, amount: value })
+      }
+
+      if (updates.length > 0) saveUpdates(updates)
+
+      setSelection({
+        anchor: { row: previewRange.rowStart, col: previewRange.colStart },
+        focus: { row: previewRange.rowEnd, col: previewRange.colEnd },
+      })
+      setFillPreviewRange(null)
+
+      if (
+        process.env.NODE_ENV === 'development' &&
+        skippedPipeline + skippedNoLine + skippedNonItem > 0
+      ) {
+        console.log(
+          `Fill: wrote ${updates.length} cells (skipped ${skippedPipeline} pipeline, ${skippedNoLine} no-line, ${skippedNonItem} non-item)`,
+        )
+      }
+    },
+    [flatRows, periods, saveUpdates],
+  )
+
+  /**
+   * Double-click on the fill handle: auto-fill DOWN from the source range to
+   * the last focusable row before the next section header (or end of flatRows).
+   */
+  const handleFillDoubleClick = useCallback(() => {
+    if (!range) return
+    const source = range
+    const rowMax = flatRows.length - 1
+    const colMax = periods.length - 1
+
+    // Walk forward from rowEnd+1; stop at the first sectionHeader row or EOL.
+    let targetRowEnd = -1
+    for (let r = source.rowEnd + 1; r <= rowMax; r++) {
+      const fr = flatRows[r]
+      if (!fr) break
+      if (fr.kind === 'sectionHeader') break
+      if (isFocusable(fr)) targetRowEnd = r
+    }
+
+    if (targetRowEnd < 0) return // no focusable rows below
+
+    const { previewRange, targetCells } = computeFillHandleRange({
+      sourceSelection: source,
+      mouseCell: { row: targetRowEnd, col: source.colEnd },
+      rowMax,
+      colMax,
+    })
+
+    if (targetCells.length === 0) return
+    commitFillRange(source, targetCells, previewRange)
+  }, [range, flatRows, periods.length, commitFillRange]) // periods.length only — colMax is the only use
+
   useEffect(() => {
     const rowMax = flatRows.length - 1
     const colMax = periods.length - 1
@@ -587,62 +679,7 @@ export function ForecastGrid({
         colMax,
       })
 
-      // Resolve the source value: bottom-right of the source range.
-      let sourceValue = 0
-      const srcRow = flatRows[source.rowEnd]
-      const srcPeriod = periods[source.colEnd]
-      if (srcRow && srcRow.kind === 'item' && srcPeriod) {
-        const srcLine = srcRow.lineByPeriod.get(srcPeriod.id)
-        if (srcLine) sourceValue = srcLine.amount
-      }
-
-      // Build updates.
-      const updates: Array<{ id: string; amount: number }> = []
-      let skippedPipeline = 0
-      let skippedNoLine = 0
-      let skippedNonItem = 0
-      for (const { row, col } of targetCells) {
-        const fr = flatRows[row]
-        const p = periods[col]
-        if (!fr || !p) continue
-        if (fr.kind !== 'item') {
-          skippedNonItem++
-          continue
-        }
-        if (fr.isPipeline) {
-          skippedPipeline++
-          continue
-        }
-        const line = fr.lineByPeriod.get(p.id)
-        if (!line) {
-          skippedNoLine++
-          continue
-        }
-        if (line.source === 'pipeline') {
-          skippedPipeline++
-          continue
-        }
-        updates.push({ id: line.id, amount: sourceValue })
-      }
-
-      if (updates.length > 0) saveUpdates(updates)
-
-      // Expand the visible selection to the preview range so the user sees
-      // the result as selected.
-      setSelection({
-        anchor: { row: previewRange.rowStart, col: previewRange.colStart },
-        focus: { row: previewRange.rowEnd, col: previewRange.colEnd },
-      })
-      setFillPreviewRange(null)
-
-      if (
-        process.env.NODE_ENV === 'development' &&
-        skippedPipeline + skippedNoLine + skippedNonItem > 0
-      ) {
-        console.log(
-          `Fill: wrote ${updates.length} cells (skipped ${skippedPipeline} pipeline, ${skippedNoLine} no-line, ${skippedNonItem} non-item)`,
-        )
-      }
+      if (targetCells.length > 0) commitFillRange(source, targetCells, previewRange)
     }
 
     const onKey = (e: KeyboardEvent) => {
@@ -664,7 +701,7 @@ export function ForecastGrid({
       window.removeEventListener('mouseup', onUp)
       window.removeEventListener('keydown', onKey)
     }
-  }, [flatRows, periods, saveUpdates])
+  }, [flatRows, periods, commitFillRange])
 
   // Click outside the grid clears the selection.
   const gridRootRef = useRef<HTMLDivElement>(null)
@@ -1266,6 +1303,7 @@ export function ForecastGrid({
                 overrideScenarioLabel={overrideScenarioLabel}
                 fillPreviewRange={fillPreviewRange}
                 onFillStart={handleFillStart}
+                onFillDoubleClick={handleFillDoubleClick}
                 onCellCreate={handleEmptyCellCreate}
               />
             ))}
@@ -1569,6 +1607,7 @@ const SectionBlock = memo(function SectionBlock({
   overrideScenarioLabel,
   fillPreviewRange,
   onFillStart,
+  onFillDoubleClick,
 }: {
   section: Category
   categories: Category[]
@@ -1591,6 +1630,7 @@ const SectionBlock = memo(function SectionBlock({
   overrideScenarioLabel?: string
   fillPreviewRange: { rowStart: number; rowEnd: number; colStart: number; colEnd: number } | null
   onFillStart: () => void
+  onFillDoubleClick: () => void
 }) {
   const style = getSectionStyle(section.flowDirection)
 
@@ -1885,6 +1925,7 @@ const SectionBlock = memo(function SectionBlock({
                       isFillPreview={inFillPreview}
                       showFillHandle={showHandle}
                       onFillStart={onFillStart}
+                      onFillDoubleClick={onFillDoubleClick}
                     />
                   )
                 })}

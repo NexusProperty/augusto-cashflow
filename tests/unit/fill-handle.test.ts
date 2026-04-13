@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   computeFillHandleRange,
   isInFillRange,
+  detectPattern,
+  materialisePattern,
   type FillHandleInput,
 } from '@/lib/forecast/fill-handle'
 
@@ -165,6 +167,90 @@ describe('computeFillHandleRange', () => {
     const result = computeFillHandleRange(build({ source: [2, 5], mouse: [2, 1] }))
     expect(result.previewRange).toEqual({ rowStart: 2, rowEnd: 2, colStart: 5, colEnd: 5 })
     expect(result.targetCells).toEqual([])
+  })
+})
+
+describe('detectPattern', () => {
+  it('single cell → constant with that cells value', () => {
+    const result = detectPattern([{ row: 0, col: 0, amount: 42 }])
+    expect(result).toEqual({ type: 'constant', value: 42 })
+  })
+
+  it('empty source → constant with value 0', () => {
+    const result = detectPattern([])
+    expect(result).toEqual({ type: 'constant', value: 0 })
+  })
+
+  it('2 cells in a row with constant delta → series (axis=col)', () => {
+    const result = detectPattern([
+      { row: 0, col: 0, amount: 100 },
+      { row: 0, col: 1, amount: 110 },
+    ])
+    expect(result).toEqual({ type: 'series', start: 110, delta: 10, axis: 'col' })
+  })
+
+  it('2 cells in a column with constant delta → series (axis=row)', () => {
+    const result = detectPattern([
+      { row: 0, col: 3, amount: 200 },
+      { row: 1, col: 3, amount: 250 },
+    ])
+    expect(result).toEqual({ type: 'series', start: 250, delta: 50, axis: 'row' })
+  })
+
+  it('3 cells with mixed deltas → constant (fallback to last value)', () => {
+    const result = detectPattern([
+      { row: 0, col: 0, amount: 100 },
+      { row: 0, col: 1, amount: 110 },
+      { row: 0, col: 2, amount: 125 },
+    ])
+    expect(result).toEqual({ type: 'constant', value: 125 })
+  })
+
+  it('2D source (2 rows × 2 cols) → constant', () => {
+    const result = detectPattern([
+      { row: 0, col: 0, amount: 100 },
+      { row: 0, col: 1, amount: 110 },
+      { row: 1, col: 0, amount: 200 },
+      { row: 1, col: 1, amount: 210 },
+    ])
+    expect(result).toEqual({ type: 'constant', value: 210 })
+  })
+
+  it('negative delta (100, 90, 80) → series (axis=col), delta=-10', () => {
+    const result = detectPattern([
+      { row: 0, col: 0, amount: 100 },
+      { row: 0, col: 1, amount: 90 },
+      { row: 0, col: 2, amount: 80 },
+    ])
+    expect(result).toEqual({ type: 'series', start: 80, delta: -10, axis: 'col' })
+  })
+})
+
+describe('materialisePattern', () => {
+  it('constant pattern of value 42, n=5 → [42,42,42,42,42]', () => {
+    expect(materialisePattern({ type: 'constant', value: 42 }, 5)).toEqual([42, 42, 42, 42, 42])
+  })
+
+  it('series start=100 delta=10 n=3 → [110,120,130] — picks up AFTER the last source value', () => {
+    // start=100 represents the last source cell's value; first output is 100+10=110
+    expect(materialisePattern({ type: 'series', start: 100, delta: 10, axis: 'col' }, 3)).toEqual([
+      110, 120, 130,
+    ])
+  })
+
+  it('n=0 → []', () => {
+    expect(materialisePattern({ type: 'constant', value: 99 }, 0)).toEqual([])
+    expect(materialisePattern({ type: 'series', start: 0, delta: 5, axis: 'row' }, 0)).toEqual([])
+  })
+
+  it('integration: detectPattern 2-cell series + materialisePattern(3) → [120,130,140]', () => {
+    // Source: [100, 110]. Pattern start = last source = 110, delta = 10.
+    // First output = 110+10 = 120.
+    const pattern = detectPattern([
+      { row: 0, col: 0, amount: 100 },
+      { row: 0, col: 1, amount: 110 },
+    ])
+    expect(materialisePattern(pattern, 3)).toEqual([120, 130, 140])
   })
 })
 
