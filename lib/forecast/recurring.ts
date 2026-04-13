@@ -40,6 +40,8 @@ export function generateRecurringLines(
       notes: rule.description,
       sourceDocumentId: null,
       sourceRuleId: rule.id,
+      sourcePipelineProjectId: null,
+      lineStatus: 'confirmed',
     })
   }
   return results

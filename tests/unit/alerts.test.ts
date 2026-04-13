@@ -31,7 +31,8 @@ describe('detectAlerts', () => {
       id: 'l1', entityId: 'e1', categoryId: 'loans', periodId: 'p1',
       amount: -900000, confidence: 100, source: 'manual',
       counterparty: 'Trade Finance', notes: null,
-      sourceDocumentId: null, sourceRuleId: null,
+      sourceDocumentId: null, sourceRuleId: null, sourcePipelineProjectId: null,
+      lineStatus: 'confirmed',
     }]
     const alerts = detectAlerts(summaries, lines)
     const cliffAlert = alerts.find((a) => a.type === 'cash_cliff')

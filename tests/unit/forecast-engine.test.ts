@@ -28,6 +28,8 @@ const line = (
   notes: null,
   sourceDocumentId: null,
   sourceRuleId: null,
+  sourcePipelineProjectId: null,
+  lineStatus: 'confirmed',
 })
 
 const categories: Category[] = [

@@ -12,6 +12,8 @@ interface ForecastGridProps {
   categories: Category[]
   lines: ForecastLine[]
   summaries: WeekSummary[]
+  overriddenIds?: string[]
+  overrideScenarioLabel?: string
 }
 
 // Compute unique item rows for a section (grouped by categoryId + label)
@@ -42,10 +44,18 @@ function buildItemRows(
   return { sectionLines, itemMap }
 }
 
-export function ForecastGrid({ periods, categories, lines, summaries }: ForecastGridProps) {
+export function ForecastGrid({
+  periods,
+  categories,
+  lines,
+  summaries,
+  overriddenIds,
+  overrideScenarioLabel,
+}: ForecastGridProps) {
   const [, startTransition] = useTransition()
 
   const summaryMap = useMemo(() => new Map(summaries.map((s) => [s.periodId, s])), [summaries])
+  const overriddenSet = useMemo(() => new Set(overriddenIds ?? []), [overriddenIds])
 
   const handleCellSave = useCallback((lineId: string, amount: number) => {
     const fd = new FormData()
@@ -169,6 +179,8 @@ export function ForecastGrid({ periods, categories, lines, summaries }: Forecast
                 collapsed={collapsed[section.id] ?? false}
                 onToggle={toggleSection}
                 hideEmpty={hideEmpty}
+                overriddenSet={overriddenSet}
+                overrideScenarioLabel={overrideScenarioLabel}
               />
             ))}
 
@@ -307,6 +319,8 @@ const SectionBlock = memo(function SectionBlock({
   collapsed,
   onToggle,
   hideEmpty,
+  overriddenSet,
+  overrideScenarioLabel,
 }: {
   section: Category
   categories: Category[]
@@ -316,6 +330,8 @@ const SectionBlock = memo(function SectionBlock({
   collapsed: boolean
   onToggle: (id: string) => void
   hideEmpty: boolean
+  overriddenSet?: Set<string>
+  overrideScenarioLabel?: string
 }) {
   const style = getSectionStyle(section.flowDirection)
 
@@ -439,6 +455,7 @@ const SectionBlock = memo(function SectionBlock({
                   confidence: 100,
                   sourceDocumentId: null,
                   sourceRuleId: null,
+                  sourcePipelineProjectId: null,
                   lineStatus: 'none',
                 })
               }
@@ -457,6 +474,11 @@ const SectionBlock = memo(function SectionBlock({
 
           {itemRows.map(({ key, label, lineMap, isPipeline, line }) => {
             if (hideEmpty && emptyKeys.has(key)) return null
+            const isOverridden =
+              overriddenSet && Array.from(lineMap.values()).some((l) => overriddenSet.has(l.id))
+            const overrideTitle = isOverridden
+              ? `Overridden in ${overrideScenarioLabel ?? 'active scenario'}`
+              : undefined
             return (
               <ForecastRow
                 key={key}
@@ -477,11 +499,21 @@ const SectionBlock = memo(function SectionBlock({
                 }
                 readOnlyCells={isPipeline}
                 badge={
-                  isPipeline
-                    ? <Badge variant="pipeline" className="ml-1.5">Pipeline</Badge>
-                    : undefined
+                  <>
+                    {isPipeline && <Badge variant="pipeline" className="ml-1.5">Pipeline</Badge>}
+                    {isOverridden && (
+                      <span
+                        title={overrideTitle}
+                        className="ml-1.5 inline-flex items-center rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20"
+                      >
+                        Overridden
+                      </span>
+                    )}
+                  </>
                 }
-                title={isPipeline && line.counterparty ? line.counterparty : undefined}
+                title={
+                  overrideTitle ?? (isPipeline && line.counterparty ? line.counterparty : undefined)
+                }
               />
             )
           })}

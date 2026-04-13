@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
-import { loadForecastData } from '@/lib/forecast/queries'
+import { loadForecastData, loadScenarioOverrides } from '@/lib/forecast/queries'
 import { generateRecurringLines } from '@/lib/forecast/recurring'
-import { computeWeekSummaries } from '@/lib/forecast/engine'
+import { computeWeekSummaries, applyScenarioOverrides } from '@/lib/forecast/engine'
 import { AUGUSTO_GROUP_ID } from '@/lib/types'
 import { ForecastGrid } from '@/components/forecast/forecast-grid'
 import { ScenarioToolbar } from '@/components/forecast/scenario-toolbar'
@@ -24,7 +24,10 @@ export default async function ForecastDetailPage({
       id: `recurring-${rule.id}-${l.periodId}`,
     }))
   )
-  const allLines = [...data.lines, ...recurringLines] as any[]
+  const baseLines = [...data.lines, ...recurringLines] as any[]
+
+  const overrides = await loadScenarioOverrides(supabase, params.scenario)
+  const { lines: allLines, overriddenIds } = applyScenarioOverrides(baseLines, overrides, data.periods)
 
   const summaries = computeWeekSummaries(
     data.periods,
@@ -69,6 +72,10 @@ export default async function ForecastDetailPage({
         categories={data.categories}
         lines={allLines}
         summaries={summaries}
+        overriddenIds={Array.from(overriddenIds)}
+        overrideScenarioLabel={
+          scenarios.find((s) => s.id === params.scenario)?.name ?? undefined
+        }
       />
     </div>
   )

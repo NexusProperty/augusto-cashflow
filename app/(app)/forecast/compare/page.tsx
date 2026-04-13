@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
-import { loadForecastData } from '@/lib/forecast/queries'
-import { computeWeekSummaries } from '@/lib/forecast/engine'
+import { loadForecastData, loadScenarioOverrides } from '@/lib/forecast/queries'
+import { computeWeekSummaries, applyScenarioOverrides } from '@/lib/forecast/engine'
 import { generateRecurringLines } from '@/lib/forecast/recurring'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
 import { AUGUSTO_GROUP_ID } from '@/lib/types'
@@ -13,21 +13,39 @@ export default async function CompareScenarios() {
   const recurringLines = data.rules.flatMap((rule) =>
     generateRecurringLines(rule, data.periods).map((l) => ({ ...l, id: `recurring-${rule.id}-${l.periodId}` }))
   )
-  const allLines = [...data.lines, ...recurringLines] as any[]
+  const baseInputLines = [...data.lines, ...recurringLines] as any[]
 
-  const baseSummaries = computeWeekSummaries(data.periods, allLines, data.categories, data.entityGroup?.odFacilityLimit ?? 0, true)
+  const scenarioByName = new Map((scenarios ?? []).map((s) => [s.name, s.id]))
+  const baseId = scenarioByName.get('Base Case') ?? null
+  const bestId = scenarioByName.get('Best Case') ?? null
+  const worstId = scenarioByName.get('Worst Case') ?? null
 
-  const bestLines = allLines.map((l) => ({
-    ...l,
-    confidence: l.confidence < 100 ? Math.max(l.confidence, 90) : l.confidence,
-  }))
-  const bestSummaries = computeWeekSummaries(data.periods, bestLines, data.categories, data.entityGroup?.odFacilityLimit ?? 0, true)
+  const [baseOverrides, bestOverrides, worstOverrides] = await Promise.all([
+    loadScenarioOverrides(supabase, baseId),
+    loadScenarioOverrides(supabase, bestId),
+    loadScenarioOverrides(supabase, worstId),
+  ])
 
-  const worstLines = allLines.map((l) => ({
-    ...l,
-    confidence: l.confidence < 100 ? Math.min(l.confidence, 30) : l.confidence,
-  }))
-  const worstSummaries = computeWeekSummaries(data.periods, worstLines, data.categories, data.entityGroup?.odFacilityLimit ?? 0, true)
+  const odLimit = data.entityGroup?.odFacilityLimit ?? 0
+
+  const base = applyScenarioOverrides(baseInputLines, baseOverrides, data.periods)
+  const baseSummaries = computeWeekSummaries(data.periods, base.lines, data.categories, odLimit, true)
+
+  const bestApplied = applyScenarioOverrides(baseInputLines, bestOverrides, data.periods)
+  const bestLines = bestApplied.lines.map((l) =>
+    bestApplied.confidenceOverriddenIds.has(l.id) || l.confidence === 100
+      ? l
+      : { ...l, confidence: Math.max(l.confidence, 90) }
+  )
+  const bestSummaries = computeWeekSummaries(data.periods, bestLines, data.categories, odLimit, true)
+
+  const worstApplied = applyScenarioOverrides(baseInputLines, worstOverrides, data.periods)
+  const worstLines = worstApplied.lines.map((l) =>
+    worstApplied.confidenceOverriddenIds.has(l.id) || l.confidence === 100
+      ? l
+      : { ...l, confidence: Math.min(l.confidence, 30) }
+  )
+  const worstSummaries = computeWeekSummaries(data.periods, worstLines, data.categories, odLimit, true)
 
   return (
     <div>

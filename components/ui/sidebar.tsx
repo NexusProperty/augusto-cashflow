@@ -44,6 +44,7 @@ const forecastSubItems = [
   { label: 'Overview', href: '/forecast' },
   { label: 'Detail', href: '/forecast/detail' },
   { label: 'Compare', href: '/forecast/compare' },
+  { label: 'Overrides', href: '/forecast/overrides' },
 ]
 
 const pipelineSubItems = [

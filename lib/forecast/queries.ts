@@ -1,4 +1,4 @@
-import type { ForecastLine, Period, Category, EntityGroup } from '@/lib/types'
+import type { ForecastLine, Period, Category, EntityGroup, ScenarioOverride } from '@/lib/types'
 import type { RecurringRule } from '@/lib/forecast/recurring'
 
 // Map DB snake_case rows to app camelCase types
@@ -43,8 +43,34 @@ function mapForecastLine(row: any): ForecastLine {
     notes: row.notes,
     sourceDocumentId: row.source_document_id,
     sourceRuleId: row.source_rule_id,
+    sourcePipelineProjectId: row.source_pipeline_project_id ?? null,
     lineStatus: row.line_status ?? 'confirmed',
   }
+}
+
+function mapScenarioOverride(row: any): ScenarioOverride {
+  return {
+    id: row.id,
+    scenarioId: row.scenario_id,
+    targetType: row.target_type,
+    targetId: row.target_id,
+    overrideConfidence: row.override_confidence ?? null,
+    overrideAmount: row.override_amount !== null && row.override_amount !== undefined ? Number(row.override_amount) : null,
+    overrideWeekShift: row.override_week_shift ?? 0,
+    isExcluded: row.is_excluded ?? false,
+  }
+}
+
+export async function loadScenarioOverrides(
+  supabase: any,
+  scenarioId: string | null | undefined,
+): Promise<ScenarioOverride[]> {
+  if (!scenarioId) return []
+  const { data } = await supabase
+    .from('scenario_overrides')
+    .select('*')
+    .eq('scenario_id', scenarioId)
+  return (data ?? []).map(mapScenarioOverride)
 }
 
 function mapRecurringRule(row: any): RecurringRule {

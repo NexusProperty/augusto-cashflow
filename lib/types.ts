@@ -19,7 +19,21 @@ export interface ForecastLine {
   notes: string | null
   sourceDocumentId: string | null
   sourceRuleId: string | null
+  sourcePipelineProjectId: string | null
   lineStatus: LineStatus
+}
+
+export type OverrideTargetType = 'pipeline_item' | 'recurring_rule'
+
+export interface ScenarioOverride {
+  id: string
+  scenarioId: string
+  targetType: OverrideTargetType
+  targetId: string
+  overrideConfidence: number | null
+  overrideAmount: number | null
+  overrideWeekShift: number
+  isExcluded: boolean
 }
 
 export interface Period {
