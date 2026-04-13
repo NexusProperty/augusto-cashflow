@@ -315,6 +315,44 @@ export async function bulkAddForecastLines(
   return { ok: true, data: result }
 }
 
+// --- Rename forecast lines (inline label editor) -----------------------------
+
+const RenameForecastLinesSchema = z.object({
+  lineIds: z.array(z.string().uuid()).min(1).max(500),
+  counterparty: z.string().trim().min(1).max(200),
+})
+
+/**
+ * Rename all lines belonging to an item row by writing a new counterparty on
+ * every given line id. The row label resolves to
+ * `counterparty ?? notes ?? 'Line item'`, so writing counterparty across every
+ * line in the row is sufficient to re-label the row across all periods.
+ */
+export async function renameForecastLines(input: unknown) {
+  await requireAuth()
+  const parsed = RenameForecastLinesSchema.safeParse(input)
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Invalid input' }
+  }
+
+  const { inScope, outOfScope } = await assertForecastLinesInScope(parsed.data.lineIds)
+  if (outOfScope.length > 0) return { error: 'Some lines not in your scope' }
+  if (inScope.length === 0) return { error: 'No lines to rename' }
+
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from('forecast_lines')
+    .update({
+      counterparty: parsed.data.counterparty,
+      updated_at: new Date().toISOString(),
+    })
+    .in('id', inScope)
+
+  if (error) return { error: 'Failed to rename' }
+  revalidateForecast()
+  return { ok: true as const, count: inScope.length }
+}
+
 // --- Per-bank opening balances (migration 024) -------------------------------
 
 const UpdateBankOpeningBalanceSchema = z.object({
