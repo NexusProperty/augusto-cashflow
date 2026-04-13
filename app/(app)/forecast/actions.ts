@@ -314,3 +314,30 @@ export async function bulkAddForecastLines(
 
   return { ok: true, data: result }
 }
+
+// --- Per-bank opening balances (migration 024) -------------------------------
+
+const UpdateBankOpeningBalanceSchema = z.object({
+  bankAccountId: z.string().uuid(),
+  openingBalance: z.number().finite().min(-100_000_000).max(100_000_000),
+})
+
+export async function updateBankOpeningBalance(input: unknown) {
+  await requireAuth()
+  const parsed = UpdateBankOpeningBalanceSchema.safeParse(input)
+  if (!parsed.success) return { error: parsed.error.message }
+
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from('bank_accounts')
+    .update({ opening_balance: parsed.data.openingBalance })
+    .eq('id', parsed.data.bankAccountId)
+    .eq('is_active', true)
+
+  if (error) {
+    return { error: 'Update failed' }
+  }
+
+  revalidateForecast()
+  return { ok: true }
+}

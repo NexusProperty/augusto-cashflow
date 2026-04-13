@@ -23,6 +23,28 @@ export interface ForecastLine {
   lineStatus: LineStatus
   /** Formula expression (e.g. =SUM(W1:W4)). Null = plain amount. */
   formula: string | null
+  /** Bank account this line flows through. Null = unrouted (pre-migration-024). */
+  bankAccountId?: string | null
+}
+
+export interface BankAccount {
+  id: string
+  entityId: string
+  name: string
+  accountType: string | null
+  accountNumber: string | null
+  odLimit: number
+  openingBalance: number
+  isActive: boolean
+  notes: string | null
+}
+
+export interface BankBalance {
+  bankAccountId: string
+  bankName: string
+  openingBalance: number
+  netCashFlow: number
+  closingBalance: number
 }
 
 export type OverrideTargetType = 'pipeline_item' | 'recurring_rule'
@@ -71,6 +93,8 @@ export interface WeekSummary {
   closingBalance: number
   availableCash: number
   isOverdrawn: boolean
+  /** Per-bank breakdown, ordered to match MAIN_FORECAST_BANK_NAMES. Empty if engine called without bankAccounts. */
+  byBank: BankBalance[]
 }
 
 export interface ForecastAlert {

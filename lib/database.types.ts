@@ -12,31 +12,6 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.5"
   }
-  graphql_public: {
-    Tables: {
-      [_ in never]: never
-    }
-    Views: {
-      [_ in never]: never
-    }
-    Functions: {
-      graphql: {
-        Args: {
-          extensions?: Json
-          operationName?: string
-          query?: string
-          variables?: Json
-        }
-        Returns: Json
-      }
-    }
-    Enums: {
-      [_ in never]: never
-    }
-    CompositeTypes: {
-      [_ in never]: never
-    }
-  }
   public: {
     Tables: {
       bank_accounts: {
@@ -50,6 +25,7 @@ export type Database = {
           name: string
           notes: string | null
           od_limit: number | null
+          opening_balance: number
           updated_at: string | null
         }
         Insert: {
@@ -62,6 +38,7 @@ export type Database = {
           name: string
           notes?: string | null
           od_limit?: number | null
+          opening_balance?: number
           updated_at?: string | null
         }
         Update: {
@@ -74,6 +51,7 @@ export type Database = {
           name?: string
           notes?: string | null
           od_limit?: number | null
+          opening_balance?: number
           updated_at?: string | null
         }
         Relationships: [
@@ -403,7 +381,7 @@ export type Database = {
       forecast_lines: {
         Row: {
           amount: number
-          bank_account_id: string | null
+          bank_account_id: string
           category_id: string
           confidence: number
           counterparty: string | null
@@ -423,7 +401,7 @@ export type Database = {
         }
         Insert: {
           amount?: number
-          bank_account_id?: string | null
+          bank_account_id?: string
           category_id: string
           confidence?: number
           counterparty?: string | null
@@ -443,7 +421,7 @@ export type Database = {
         }
         Update: {
           amount?: number
-          bank_account_id?: string | null
+          bank_account_id?: string
           category_id?: string
           confidence?: number
           counterparty?: string | null
@@ -969,7 +947,7 @@ export type Tables<
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1074,9 +1052,6 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
-  graphql_public: {
-    Enums: {},
-  },
   public: {
     Enums: {
       document_status: [

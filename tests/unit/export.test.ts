@@ -319,6 +319,7 @@ describe('buildCsv — summary rows', () => {
       closingBalance: 5000 + 500 * (i + 1),
       availableCash: 3000 + 500 * (i + 1),
       isOverdrawn: false,
+      byBank: [],
     }))
 
     const csv = buildCsv(baseArgs({ scope: 'all', summaries }))
@@ -348,6 +349,7 @@ describe('buildCsv — summary rows', () => {
         closingBalance: -500,
         availableCash: -500,
         isOverdrawn: true,
+        byBank: [],
       },
     ]
     const line = mkLine('lx', 'subA1', 'p0', 0)

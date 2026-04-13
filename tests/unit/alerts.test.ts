@@ -13,6 +13,7 @@ const summary = (periodId: string, overrides: Partial<WeekSummary> = {}): WeekSu
   closingBalance: 0,
   availableCash: 0,
   isOverdrawn: false,
+  byBank: [],
   ...overrides,
 })
 
