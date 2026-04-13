@@ -35,7 +35,7 @@ export default async function PipelineSummaryPage({
         <h1 className="text-xl font-semibold text-zinc-900">Pipeline Summary</h1>
         <FiscalYearNav />
       </div>
-      <SummaryTable rows={summaryRows} months={months} />
+      <SummaryTable rows={summaryRows} months={months} fiscalYear={fy} />
     </div>
   )
 }

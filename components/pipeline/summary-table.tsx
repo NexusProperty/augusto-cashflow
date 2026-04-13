@@ -26,17 +26,21 @@ import { MetricRow } from './summary-table-rows'
 import { computeAggregates } from '@/lib/forecast/aggregates'
 import { SummarySelectionStats } from './summary-selection-stats'
 import { SummaryFindBar } from './summary-find-bar'
+import { buildSummaryCsv } from '@/lib/pipeline/export-summary'
 
 interface SummaryTableProps {
   rows: BUSummaryRow[]
   months: string[]
+  fiscalYear?: number
 }
+
+type ExportScope = 'all' | 'view' | 'selection'
 
 function isAllZero(arr: number[]): boolean {
   return arr.every((v) => v === 0)
 }
 
-export function SummaryTable({ rows, months }: SummaryTableProps) {
+export function SummaryTable({ rows, months, fiscalYear }: SummaryTableProps) {
   const colCount = months.length + 2 // label + N months + total
   const selectableColCount = months.length + 1
   const totalColIndex = months.length
@@ -53,6 +57,22 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
   const [selection, setSelection] = useState<Selection | null>(null)
   const isDraggingRef = useRef(false)
   const tableWrapperRef = useRef<HTMLDivElement>(null)
+
+  // ── Export dropdown state ───────────────────────────────────────────
+  const [exportOpen, setExportOpen] = useState(false)
+  const exportRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!exportOpen) return
+    function onDocMouseDown(e: MouseEvent) {
+      if (!exportRef.current) return
+      if (!exportRef.current.contains(e.target as Node)) {
+        setExportOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [exportOpen])
 
   // ── Find state ──────────────────────────────────────────────────────
   const [findOpen, setFindOpen] = useState(false)
@@ -225,6 +245,38 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
   const openFind = useCallback(() => {
     setFindOpen(true)
   }, [])
+
+  // ── Export handler ──────────────────────────────────────────────────
+  const handleExport = useCallback(
+    (scope: ExportScope) => {
+      let csv: string
+      if (scope === 'selection') {
+        if (!selection) return
+        csv = buildSummaryCsv({ flatRows, months, selection, scope: 'selection' })
+      } else {
+        csv = buildSummaryCsv({
+          rows,
+          months,
+          scope,
+          collapsed: scope === 'view' ? effectiveCollapsed : undefined,
+        })
+      }
+      const fy = fiscalYear ?? (months[0] ? parseInt(months[0].slice(0, 4), 10) + 1 : 0)
+      const fyLabel = fy ? `FY${String(fy).slice(-2)}` : 'FY'
+      const filename = `pipeline-summary-${fyLabel}-${scope}.csv`
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      setExportOpen(false)
+    },
+    [rows, months, fiscalYear, flatRows, selection, effectiveCollapsed],
+  )
 
   const closeFind = useCallback(() => {
     setFindOpen(false)
@@ -458,17 +510,61 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
               onOnlyMatchingChange={setOnlyMatching}
             />
           ) : (
-            <button
-              type="button"
-              onClick={openFind}
-              title="Find (Ctrl+F)"
-              className="flex items-center gap-1 rounded border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
-            >
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z" />
-              </svg>
-              Find
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={openFind}
+                title="Find (Ctrl+F)"
+                className="flex items-center gap-1 rounded border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z" />
+                </svg>
+                Find
+              </button>
+              <div ref={exportRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setExportOpen((v) => !v)}
+                  title="Export CSV"
+                  className="flex items-center gap-1 rounded border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
+                  </svg>
+                  Export CSV
+                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {exportOpen && (
+                  <div className="absolute left-0 top-full z-30 mt-1 w-60 rounded border border-zinc-200 bg-white py-1 text-xs shadow-lg">
+                    <button
+                      type="button"
+                      onClick={() => handleExport('all')}
+                      className="block w-full px-3 py-1.5 text-left text-zinc-700 hover:bg-zinc-50"
+                    >
+                      All entities × all months
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleExport('view')}
+                      className="block w-full px-3 py-1.5 text-left text-zinc-700 hover:bg-zinc-50"
+                    >
+                      Current view (respects collapsed)
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!selection}
+                      onClick={() => handleExport('selection')}
+                      className="block w-full px-3 py-1.5 text-left text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:text-zinc-300 disabled:hover:bg-white"
+                    >
+                      Selection
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </div>
         <div className="flex items-center gap-2">
