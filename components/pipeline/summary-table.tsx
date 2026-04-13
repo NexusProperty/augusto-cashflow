@@ -16,9 +16,16 @@ import {
   type Selection,
   type CellRef,
 } from '@/lib/pipeline/summary-selection'
+import {
+  buildMatchList,
+  nextMatchIndex,
+  prevMatchIndex,
+  type FindMatch,
+} from '@/lib/pipeline/summary-find'
 import { MetricRow } from './summary-table-rows'
 import { computeAggregates } from '@/lib/forecast/aggregates'
 import { SummarySelectionStats } from './summary-selection-stats'
+import { SummaryFindBar } from './summary-find-bar'
 
 interface SummaryTableProps {
   rows: BUSummaryRow[]
@@ -31,11 +38,9 @@ function isAllZero(arr: number[]): boolean {
 
 export function SummaryTable({ rows, months }: SummaryTableProps) {
   const colCount = months.length + 2 // label + N months + total
-  // Selectable cols: months + virtual Total = months.length + 1
   const selectableColCount = months.length + 1
   const totalColIndex = months.length
 
-  // Default: collapsed if entity has all-zero data, expanded otherwise
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {}
     for (const row of rows) {
@@ -49,23 +54,222 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
   const isDraggingRef = useRef(false)
   const tableWrapperRef = useRef<HTMLDivElement>(null)
 
-  const flatRows = useMemo(() => buildFlatSummaryRows(rows, collapsed), [rows, collapsed])
+  // ── Find state ──────────────────────────────────────────────────────
+  const [findOpen, setFindOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
+  const [findCursor, setFindCursor] = useState<number | null>(null)
+  const [onlyMatching, setOnlyMatching] = useState(false)
+  const [flashOn, setFlashOn] = useState(false)
+  const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const triggerFlash = useCallback(() => {
+    if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current)
+    setFlashOn(true)
+    flashTimeoutRef.current = setTimeout(() => {
+      setFlashOn(false)
+      flashTimeoutRef.current = null
+    }, 500)
+  }, [])
+
+  // Fully-expanded flat rows — used ONLY as the search corpus so collapsed
+  // entities are still findable.
+  const expandedFlatRows = useMemo(
+    () => buildFlatSummaryRows(rows, {}),
+    [rows],
+  )
+
+  const matches = useMemo<FindMatch[]>(
+    () => (findOpen ? buildMatchList(expandedFlatRows, months.length, findQuery) : []),
+    [findOpen, expandedFlatRows, months.length, findQuery],
+  )
+
+  // Set of entityIds (+ 'group-total' sentinel) that have at least one match —
+  // used for "Only matching rows" filtering.
+  const matchedEntities = useMemo(() => {
+    const s = new Set<string>()
+    for (const m of matches) {
+      const fr = expandedFlatRows[m.row]
+      if (!fr) continue
+      s.add(fr.entityId ?? '__group_total__')
+    }
+    return s
+  }, [matches, expandedFlatRows])
+
+  // Effective display rows: respect collapsed, optionally filter by matches.
+  const effectiveCollapsed = useMemo(() => {
+    if (!findOpen || !onlyMatching) return collapsed
+    // Force-collapse any entity that has no matches.
+    const out: Record<string, boolean> = { ...collapsed }
+    for (const r of rows) {
+      if (!matchedEntities.has(r.entityId)) out[r.entityId] = true
+      else out[r.entityId] = false
+    }
+    return out
+  }, [findOpen, onlyMatching, collapsed, rows, matchedEntities])
+
+  const flatRows = useMemo(
+    () => buildFlatSummaryRows(rows, effectiveCollapsed),
+    [rows, effectiveCollapsed],
+  )
   const flatRowCount = flatRows.length
+
+  // Display-row lookup: entityId + metricKey → display flat-row index.
+  const flatRowIndex = useMemo(() => {
+    const byEntity = new Map<string, Map<SummaryMetricKey, number>>()
+    const groupTotal = new Map<SummaryMetricKey, number>()
+    flatRows.forEach((fr, i) => {
+      if (fr.kind === 'entity-metric' && fr.entityId) {
+        let inner = byEntity.get(fr.entityId)
+        if (!inner) {
+          inner = new Map()
+          byEntity.set(fr.entityId, inner)
+        }
+        inner.set(fr.metricKey, i)
+      } else if (fr.kind === 'group-total-metric') {
+        groupTotal.set(fr.metricKey, i)
+      }
+    })
+    return { byEntity, groupTotal }
+  }, [flatRows])
+
+  // Map a match (addressing expandedFlatRows) to a display-list (row, col) —
+  // returns null if the match's row is not currently visible.
+  const resolveMatchDisplay = useCallback(
+    (m: FindMatch): { row: number; col: number | null; entityId: string | null } | null => {
+      const fr = expandedFlatRows[m.row]
+      if (!fr) return null
+      const idx = fr.entityId
+        ? flatRowIndex.byEntity.get(fr.entityId)?.get(fr.metricKey) ?? null
+        : flatRowIndex.groupTotal.get(fr.metricKey) ?? null
+      if (idx === null) return null
+      return { row: idx, col: m.col, entityId: fr.entityId }
+    },
+    [expandedFlatRows, flatRowIndex],
+  )
+
+  // Current match (display coords) — for flash + scroll-into-view.
+  const currentDisplayMatch = useMemo(() => {
+    if (!findOpen || findCursor === null || matches.length === 0) return null
+    const m = matches[findCursor]
+    if (!m) return null
+    return resolveMatchDisplay(m)
+  }, [findOpen, findCursor, matches, resolveMatchDisplay])
+
+  // Other matches in display coords — pale yellow ring.
+  const otherMatchCells = useMemo(() => {
+    if (!findOpen) return new Set<string>()
+    const s = new Set<string>()
+    matches.forEach((m, i) => {
+      if (i === findCursor) return
+      const d = resolveMatchDisplay(m)
+      if (!d || d.col === null) return
+      s.add(`${d.row}:${d.col}`)
+    })
+    return s
+  }, [findOpen, matches, findCursor, resolveMatchDisplay])
+
+  // For row-level matches (col === null), highlight the first data cell (col 0)
+  // to match selection-jump behavior.
+  const currentMatchCellKey = currentDisplayMatch
+    ? `${currentDisplayMatch.row}:${currentDisplayMatch.col ?? 0}`
+    : null
+
+  // Reset cursor when matches list changes meaningfully.
+  useEffect(() => {
+    if (!findOpen) {
+      setFindCursor(null)
+      return
+    }
+    if (matches.length === 0) {
+      setFindCursor(null)
+    } else if (findCursor === null || findCursor >= matches.length) {
+      setFindCursor(0)
+    }
+  }, [findOpen, matches.length, findCursor])
+
+  // ── Find navigation ─────────────────────────────────────────────────
+  // Cursor changes drive expand + flash via the cursor-change effect below.
+  // We also fire triggerFlash() here so that re-navigating to the same cursor
+  // (e.g. F3 with a single match) still pulses.
+  const jumpToCursor = useCallback(
+    (cursor: number) => {
+      setFindCursor(cursor)
+      triggerFlash()
+    },
+    [triggerFlash],
+  )
+
+  // After display-list updates, sync selection + scroll-into-view.
+  useEffect(() => {
+    if (!currentDisplayMatch) return
+    const { row, col } = currentDisplayMatch
+    const cellCol = col === null ? 0 : col
+    setSelection({
+      anchor: { row, col: cellCol },
+      focus: { row, col: cellCol },
+    })
+  }, [currentDisplayMatch])
+
+  const findNext = useCallback(() => {
+    if (matches.length === 0) return
+    const nx = nextMatchIndex(findCursor, matches.length)
+    jumpToCursor(nx)
+  }, [matches.length, findCursor, jumpToCursor])
+
+  const findPrev = useCallback(() => {
+    if (matches.length === 0) return
+    const nx = prevMatchIndex(findCursor, matches.length)
+    jumpToCursor(nx)
+  }, [matches.length, findCursor, jumpToCursor])
+
+  const openFind = useCallback(() => {
+    setFindOpen(true)
+  }, [])
+
+  const closeFind = useCallback(() => {
+    setFindOpen(false)
+    setFindQuery('')
+    setFindCursor(null)
+    setOnlyMatching(false)
+    setSelection(null)
+    tableWrapperRef.current?.focus()
+  }, [])
+
+  // Whenever the cursor lands on a match (manual nav OR auto on query change),
+  // expand the target entity if collapsed and fire the flash pulse.
+  useEffect(() => {
+    if (!findOpen) return
+    if (findCursor === null) return
+    const m = matches[findCursor]
+    if (!m) return
+    const fr = expandedFlatRows[m.row]
+    if (!fr) return
+    if (fr.entityId && collapsed[fr.entityId]) {
+      setCollapsed((prev) => ({ ...prev, [fr.entityId!]: false }))
+    }
+    triggerFlash()
+    // Intentionally depend on cursor + matches only — we don't want to re-fire
+    // on collapsed changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findOpen, findCursor, matches])
 
   const toggleEntity = useCallback((entityId: string) => {
     setCollapsed((prev) => ({ ...prev, [entityId]: !prev[entityId] }))
-    // Selection coordinates reference the flat-row index, which shifts on
-    // expand/collapse — simplest to clear.
     setSelection(null)
   }, [])
 
-  // Window-level mouseup ends drag (even if released outside the table).
   useEffect(() => {
     function onMouseUp() {
       isDraggingRef.current = false
     }
     window.addEventListener('mouseup', onMouseUp)
     return () => window.removeEventListener('mouseup', onMouseUp)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current)
+    }
   }, [])
 
   const handleCellMouseDown = useCallback(
@@ -77,7 +281,6 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
         return { anchor: { row, col }, focus: { row, col } }
       })
       isDraggingRef.current = true
-      // Focus the wrapper so keyboard nav works immediately.
       tableWrapperRef.current?.focus()
       e.preventDefault()
     },
@@ -91,6 +294,14 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Ctrl/Cmd+F — open find (takes precedence over Ctrl+End etc.).
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault()
+        e.stopPropagation()
+        setFindOpen(true)
+        return
+      }
+
       if (flatRowCount === 0) return
 
       if (e.key === 'Escape') {
@@ -101,7 +312,6 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
         return
       }
 
-      // If no selection yet, first arrow key starts at (0, 0).
       if (!selection) {
         if (
           e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
@@ -158,30 +368,19 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
         setFocus({ row: lastRow, col: totalColIndex })
         return
       }
+      if (e.key === 'F3') {
+        e.preventDefault()
+        if (findOpen) {
+          if (e.shiftKey) findPrev()
+          else findNext()
+        }
+        return
+      }
     },
-    [selection, flatRowCount, selectableColCount, totalColIndex],
+    [selection, flatRowCount, selectableColCount, totalColIndex, findOpen, findNext, findPrev],
   )
 
-  // Build a lookup: entityId + metricKey → visible flat row index.
-  const flatRowIndex = useMemo(() => {
-    const byEntity = new Map<string, Map<SummaryMetricKey, number>>()
-    const groupTotal = new Map<SummaryMetricKey, number>()
-    flatRows.forEach((fr, i) => {
-      if (fr.kind === 'entity-metric' && fr.entityId) {
-        let inner = byEntity.get(fr.entityId)
-        if (!inner) {
-          inner = new Map()
-          byEntity.set(fr.entityId, inner)
-        }
-        inner.set(fr.metricKey, i)
-      } else if (fr.kind === 'group-total-metric') {
-        groupTotal.set(fr.metricKey, i)
-      }
-    })
-    return { byEntity, groupTotal }
-  }, [flatRows])
-
-  // GROUP totals for display (mirror of what's in flatRows).
+  // GROUP totals for display.
   const groupTotalsForRender = useMemo(() => {
     const get = (k: SummaryMetricKey): number[] => {
       const idx = flatRowIndex.groupTotal.get(k)
@@ -198,9 +397,6 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
     return result
   }, [flatRowIndex, flatRows, months.length])
 
-  // Aggregates across the current selection. Month cells contribute the raw
-  // value at (row, col); virtual Total col contributes sumArray(row values) —
-  // matching what the row already displays.
   const selectionAggregates = useMemo(() => {
     if (!selection) return null
     const r = normalizeRange(selection)
@@ -212,7 +408,6 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
         if (col < months.length) {
           values.push(fr.values[col] ?? 0)
         } else if (col === months.length) {
-          // Virtual Total column
           let total = 0
           for (const v of fr.values) total += v
           values.push(total)
@@ -223,13 +418,21 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
     return computeAggregates(values)
   }, [selection, flatRows, months.length])
 
-  // Helper: given an entity or group-total row kind + metric key, resolve the
-  // flat row index (or null if not visible / collapsed).
   function resolveFlatRow(entityId: string | null, metricKey: SummaryMetricKey): number | null {
     if (entityId === null) {
       return flatRowIndex.groupTotal.get(metricKey) ?? null
     }
     return flatRowIndex.byEntity.get(entityId)?.get(metricKey) ?? null
+  }
+
+  // Whether to show entity header (hide when onlyMatching and no match for it).
+  const shouldShowEntity = (entityId: string): boolean => {
+    if (!findOpen || !onlyMatching) return true
+    return matchedEntities.has(entityId)
+  }
+  const shouldShowGroupTotal = (): boolean => {
+    if (!findOpen || !onlyMatching) return true
+    return matchedEntities.has('__group_total__')
   }
 
   return (
@@ -239,9 +442,35 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
       onKeyDown={handleKeyDown}
       className="bg-white rounded-xl border border-zinc-200 overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
     >
-      {/* Toolbar — left slot reserved for future find/export buttons (Tasks 3 & 4). */}
+      {/* Toolbar */}
       <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-zinc-200 min-h-[44px]">
-        <div className="flex items-center gap-2" />
+        <div className="flex items-center gap-2">
+          {findOpen ? (
+            <SummaryFindBar
+              query={findQuery}
+              total={matches.length}
+              currentIndex={findCursor}
+              onlyMatching={onlyMatching}
+              onQueryChange={setFindQuery}
+              onNext={findNext}
+              onPrev={findPrev}
+              onClose={closeFind}
+              onOnlyMatchingChange={setOnlyMatching}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={openFind}
+              title="Find (Ctrl+F)"
+              className="flex items-center gap-1 rounded border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z" />
+              </svg>
+              Find
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <SummarySelectionStats aggregates={selectionAggregates} />
         </div>
@@ -269,10 +498,10 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
 
           <tbody className="divide-y divide-zinc-100">
             {rows.map((row) => {
-              const isCollapsed = collapsed[row.entityId] ?? false
+              if (!shouldShowEntity(row.entityId)) return null
+              const isCollapsed = effectiveCollapsed[row.entityId] ?? false
               return (
                 <Fragment key={`entity-${row.entityId}`}>
-                  {/* Entity header row — clickable, collapsible (NOT selectable) */}
                   <tr
                     className="bg-zinc-50 cursor-pointer hover:bg-zinc-100/80 transition-colors"
                     onClick={() => toggleEntity(row.entityId)}
@@ -298,23 +527,28 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
                     </td>
                   </tr>
 
-                  {!isCollapsed && METRIC_ROWS.map((spec) => (
-                    <MetricRow
-                      key={spec.metricKey}
-                      spec={spec}
-                      values={row[spec.metricKey]}
-                      flatRow={resolveFlatRow(row.entityId, spec.metricKey)}
-                      selection={selection}
-                      onMouseDown={handleCellMouseDown}
-                      onMouseEnter={handleCellMouseEnter}
-                    />
-                  ))}
+                  {!isCollapsed && METRIC_ROWS.map((spec) => {
+                    const fr = resolveFlatRow(row.entityId, spec.metricKey)
+                    return (
+                      <MetricRow
+                        key={spec.metricKey}
+                        spec={spec}
+                        values={row[spec.metricKey]}
+                        flatRow={fr}
+                        selection={selection}
+                        onMouseDown={handleCellMouseDown}
+                        onMouseEnter={handleCellMouseEnter}
+                        currentMatchCellKey={currentMatchCellKey}
+                        flashOn={flashOn}
+                        otherMatchCells={otherMatchCells}
+                      />
+                    )
+                  })}
                 </Fragment>
               )
             })}
 
-            {/* GROUP total section */}
-            {rows.length > 1 && (
+            {rows.length > 1 && shouldShowGroupTotal() && (
               <>
                 <tr className="bg-zinc-50">
                   <td
@@ -334,6 +568,9 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
                     selection={selection}
                     onMouseDown={handleCellMouseDown}
                     onMouseEnter={handleCellMouseEnter}
+                    currentMatchCellKey={currentMatchCellKey}
+                    flashOn={flashOn}
+                    otherMatchCells={otherMatchCells}
                   />
                 ))}
               </>
@@ -345,6 +582,5 @@ export function SummaryTable({ rows, months }: SummaryTableProps) {
   )
 }
 
-// Expose for downstream tasks (stats, find, export) — see plan.
 export { buildFlatSummaryRows }
 export type { FlatSummaryRow }

@@ -29,6 +29,12 @@ interface CellProps {
   onMouseEnter: (row: number, col: number) => void
   className?: string
   children: React.ReactNode
+  /** "row:col" of current find match — persistently highlighted solid yellow. */
+  currentMatchCellKey?: string | null
+  /** When true, the current-match cell gets an additional transient pulse. */
+  flashOn?: boolean
+  /** Set of "row:col" for non-current find matches. */
+  otherMatchCells?: Set<string>
 }
 
 export function Cell({
@@ -39,6 +45,9 @@ export function Cell({
   onMouseEnter,
   className,
   children,
+  currentMatchCellKey,
+  flashOn,
+  otherMatchCells,
 }: CellProps) {
   const selectable = flatRow !== null
   const selected =
@@ -47,6 +56,10 @@ export function Cell({
     selectable && selection
       ? selection.focus.row === flatRow && selection.focus.col === col
       : false
+
+  const key = selectable ? `${flatRow}:${col}` : null
+  const isCurrentMatch = key !== null && currentMatchCellKey === key
+  const isOtherMatch = key !== null && !!otherMatchCells?.has(key)
 
   return (
     <td
@@ -62,6 +75,9 @@ export function Cell({
         selectable && 'cursor-cell select-none',
         selected && 'bg-blue-100/70',
         isFocus && 'ring-1 ring-blue-500 ring-inset',
+        isCurrentMatch && 'bg-yellow-200',
+        isCurrentMatch && flashOn && 'bg-yellow-300 ring-1 ring-yellow-500 ring-inset',
+        !isCurrentMatch && isOtherMatch && 'ring-1 ring-yellow-300 ring-inset',
       )}
     >
       {children}
@@ -81,6 +97,9 @@ interface MetricRowProps {
   selection: Selection | null
   onMouseDown: (e: React.MouseEvent, row: number, col: number) => void
   onMouseEnter: (row: number, col: number) => void
+  currentMatchCellKey?: string | null
+  flashOn?: boolean
+  otherMatchCells?: Set<string>
 }
 
 export function MetricRow({
@@ -91,6 +110,9 @@ export function MetricRow({
   selection,
   onMouseDown,
   onMouseEnter,
+  currentMatchCellKey,
+  flashOn,
+  otherMatchCells,
 }: MetricRowProps) {
   const total = sumArray(values)
   const bgClass = groupTotal ? 'bg-zinc-50' : 'bg-white'
@@ -121,6 +143,9 @@ export function MetricRow({
           selection={selection}
           onMouseDown={onMouseDown}
           onMouseEnter={onMouseEnter}
+          currentMatchCellKey={currentMatchCellKey}
+          flashOn={flashOn}
+          otherMatchCells={otherMatchCells}
           className={cn(
             'px-2.5 py-1.5 text-right tabular-nums text-sm',
             groupTotal && 'bg-zinc-50',
@@ -148,6 +173,9 @@ export function MetricRow({
         selection={selection}
         onMouseDown={onMouseDown}
         onMouseEnter={onMouseEnter}
+        currentMatchCellKey={currentMatchCellKey}
+        flashOn={flashOn}
+        otherMatchCells={otherMatchCells}
         className={cn(
           'px-3 py-1.5 text-right tabular-nums text-sm',
           groupTotal && 'bg-zinc-50',
