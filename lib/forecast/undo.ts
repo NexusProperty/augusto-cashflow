@@ -55,6 +55,20 @@ export type AtomicUndoEntry =
       label: string
       scenarioId: string | null
     }
+  | {
+      /**
+       * Reassign the bank_account_id of a set of forecast_lines. Produced by
+       * clicking the row-label bank chip and picking a different bank. On
+       * replay (undo/redo), prior bank ids are grouped by target and each
+       * group is dispatched to `updateForecastLinesBank` in turn.
+       */
+      kind: 'bank-reassign'
+      lineIds: string[]
+      prevBankIdByLineId: Record<string, string | null>
+      nextBankAccountId: string
+      label: string
+      scenarioId: string | null
+    }
 
 export type UndoEntry =
   | AtomicUndoEntry

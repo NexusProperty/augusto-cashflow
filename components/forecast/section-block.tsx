@@ -8,9 +8,11 @@ import { buildItemRows, type FlatRow, type RowGroupMap } from '@/lib/forecast/fl
 import { isInRange } from '@/lib/forecast/selection'
 import { isInFillRange } from '@/lib/forecast/fill-handle'
 import { formatCurrency, cn } from '@/lib/utils'
+import { MAIN_FORECAST_BANK_NAMES } from '@/lib/forecast/constants'
 import type { BankAccount, ForecastLine, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
 import { freezeCellStyle } from './forecast-grid'
+import { BankChip } from './bank-chip'
 
 // ── Section-style helper ──────────────────────────────────────────────────────
 // Maps a section's flowDirection to its colour-scheme token set.
@@ -150,6 +152,7 @@ export const SectionBlock = memo(function SectionBlock({
   onBankOpeningCommit,
   onRenameItem,
   onAddLine,
+  onRowBankCommit,
 }: {
   section: Category
   categories: Category[]
@@ -206,8 +209,19 @@ export const SectionBlock = memo(function SectionBlock({
   onRenameItem?: (lineIds: string[], newName: string) => void
   /** Add a new line under a sub-category. Parent resolves entity + period. */
   onAddLine?: (subCategoryIds: string[]) => void
+  /** Reassign every line in an item row to a new bank account. */
+  onRowBankCommit?: (lineIds: string[], bankAccountId: string) => void
 }) {
   const style = getSectionStyle(section.flowDirection)
+
+  // Main banks in canonical render order, intersected with loaded accounts.
+  // Shown in the row-label chip dropdown; undefined/empty if per-bank mode is off.
+  const mainBanksInOrder = useMemo<BankAccount[]>(() => {
+    if (!bankAccounts || bankAccounts.length === 0) return []
+    return MAIN_FORECAST_BANK_NAMES
+      .map((name) => bankAccounts.find((b) => b.name === name))
+      .filter((b): b is BankAccount => Boolean(b))
+  }, [bankAccounts])
 
   const sectionChildren = useMemo(
     () =>
@@ -677,6 +691,13 @@ export const SectionBlock = memo(function SectionBlock({
                     disabled={!onRenameItem}
                     onSave={(next) => onRenameItem?.(fr.lineIds, next)}
                   />
+                  {mainBanksInOrder.length > 0 && onRowBankCommit && (
+                    <BankChip
+                      currentBankId={firstLine.bankAccountId}
+                      banks={mainBanksInOrder}
+                      onPick={(bankId) => onRowBankCommit(fr.lineIds, bankId)}
+                    />
+                  )}
                   {isOverridden && (
                     <span
                       title={overrideTitle}

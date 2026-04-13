@@ -353,6 +353,43 @@ export async function renameForecastLines(input: unknown) {
   return { ok: true as const, count: inScope.length }
 }
 
+// --- Per-row bank reassignment (manual bank routing) -------------------------
+
+const UpdateForecastLinesBankSchema = z.object({
+  lineIds: z.array(z.string().uuid()).min(1).max(500),
+  bankAccountId: z.string().uuid(),
+})
+
+/**
+ * Reassign a set of forecast lines (typically every line behind a single
+ * item row × counterparty × category) to a different bank account. Used by
+ * the row-label bank chip on /forecast/detail.
+ */
+export async function updateForecastLinesBank(input: unknown) {
+  await requireAuth()
+  const parsed = UpdateForecastLinesBankSchema.safeParse(input)
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Invalid input' }
+  }
+
+  const { inScope, outOfScope } = await assertForecastLinesInScope(parsed.data.lineIds)
+  if (outOfScope.length > 0) return { error: 'Some lines not in your scope' }
+  if (inScope.length === 0) return { error: 'No lines to reassign' }
+
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from('forecast_lines')
+    .update({
+      bank_account_id: parsed.data.bankAccountId,
+      updated_at: new Date().toISOString(),
+    })
+    .in('id', inScope)
+
+  if (error) return { error: 'Failed to reassign bank' }
+  revalidateForecast()
+  return { ok: true as const, count: inScope.length }
+}
+
 // --- Per-bank opening balances (migration 024) -------------------------------
 
 const UpdateBankOpeningBalanceSchema = z.object({

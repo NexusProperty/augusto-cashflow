@@ -60,6 +60,15 @@ export interface UseForecastUndoDeps {
     bankAccountId: string,
     value: number,
   ) => Promise<{ ok: true } | { error: string }>
+  /**
+   * Called for `bank-reassign` undo/redo. Applies the given bank assignment
+   * to the given set of line ids. Implementation may call the server action
+   * one or more times (grouped by target bank) and patch local state.
+   */
+  onReplayBankReassign?: (
+    lineIds: string[],
+    bankAccountId: string,
+  ) => Promise<{ ok: true } | { error: string }>
 }
 
 // ── Hook return ───────────────────────────────────────────────────────────────
@@ -88,6 +97,7 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
     onReplayDelete,
     onReplayBulkAdd,
     onReplayBankOpening,
+    onReplayBankReassign,
   } = deps
 
   // ── Stack + guard refs ────────────────────────────────────────────────────
@@ -200,6 +210,30 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
           markError(res.error)
           return
         }
+      } else if (entry.kind === 'bank-reassign') {
+        if (!onReplayBankReassign) {
+          markError('Undo not supported in this view')
+          return
+        }
+        // Restore each line's prior bank id. Lines may have had different
+        // prior banks; dispatch one server call per unique prior bank group.
+        const byPrev = new Map<string, string[]>()
+        for (const lineId of entry.lineIds) {
+          const prev = entry.prevBankIdByLineId[lineId]
+          // Null prev banks cannot be restored (DB column is NOT NULL). Skip
+          // those — they'd be a pre-migration-024 state that no longer occurs.
+          if (!prev) continue
+          const list = byPrev.get(prev) ?? []
+          list.push(lineId)
+          byPrev.set(prev, list)
+        }
+        for (const [bankId, ids] of byPrev) {
+          const res = await onReplayBankReassign(ids, bankId)
+          if ('error' in res) {
+            markError(res.error)
+            return
+          }
+        }
       } else if (entry.kind === 'compound') {
         // Delegate to each sub-entry's existing replay path in order.
         // isReplayingRef is already true so sub-entry replays won't push
@@ -277,7 +311,7 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
     } finally {
       isReplayingRef.current = false
     }
-  }, [scenarioId, onReplayAmounts, onReplayStatus, onReplayDelete, onReplayBulkAdd, onReplayBankOpening, setLocalLines, localLinesRef, markError, markUndone])
+  }, [scenarioId, onReplayAmounts, onReplayStatus, onReplayDelete, onReplayBulkAdd, onReplayBankOpening, onReplayBankReassign, setLocalLines, localLinesRef, markError, markUndone])
 
   // ── replayRedo ────────────────────────────────────────────────────────────
 
@@ -332,6 +366,17 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
           return
         }
         const res = await onReplayBankOpening(entry.bankAccountId, entry.nextValue)
+        if ('error' in res) {
+          markError(res.error)
+          return
+        }
+      } else if (entry.kind === 'bank-reassign') {
+        if (!onReplayBankReassign) {
+          markError('Redo not supported in this view')
+          return
+        }
+        // Re-apply the forward bank assignment to every line.
+        const res = await onReplayBankReassign(entry.lineIds, entry.nextBankAccountId)
         if ('error' in res) {
           markError(res.error)
           return
@@ -415,7 +460,7 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
     } finally {
       isReplayingRef.current = false
     }
-  }, [scenarioId, onReplayAmounts, onReplayStatus, onReplayDelete, onReplayBulkAdd, onReplayBankOpening, setLocalLines, markError, markRedone])
+  }, [scenarioId, onReplayAmounts, onReplayStatus, onReplayDelete, onReplayBulkAdd, onReplayBankOpening, onReplayBankReassign, setLocalLines, markError, markRedone])
 
   return {
     undoStackRef,

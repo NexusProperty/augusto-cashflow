@@ -46,7 +46,7 @@ import { evaluateFormula, type EvalContext } from '@/lib/forecast/formula'
 import { buildCsv } from '@/lib/forecast/export'
 import { FindBar } from './find-bar'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
-import { updateBankOpeningBalance, updateGroupOdFacilityLimit } from '@/app/(app)/forecast/actions'
+import { updateBankOpeningBalance, updateGroupOdFacilityLimit, updateForecastLinesBank } from '@/app/(app)/forecast/actions'
 import { OdFacilityLimitEditor } from '@/components/forecast/od-facility-limit-editor'
 import type { BankAccount, ForecastLine, LineStatus, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
@@ -1520,6 +1520,16 @@ export function ForecastGrid({
       if (res && 'error' in res) return { error: res.error ?? 'Update failed' }
       return { ok: true }
     },
+    onReplayBankReassign: async (lineIds, bankAccountId) => {
+      // Apply optimistic local change first; engine recomputes per-bank flow.
+      const idSet = new Set(lineIds)
+      setLocalLines((cur) =>
+        cur.map((l) => (idSet.has(l.id) ? { ...l, bankAccountId } : l)),
+      )
+      const res = await updateForecastLinesBank({ lineIds, bankAccountId })
+      if (res && 'error' in res) return { error: res.error ?? 'Reassign failed' }
+      return { ok: true }
+    },
   })
 
   // ── Per-bank opening balance commit (Section 1 week-1 edit) ────────────────
@@ -1563,6 +1573,73 @@ export function ForecastGrid({
       })
     },
     [localBankBalances, bankAccountsProp, scenarioId, isReplayingRef, undoStackRef, startTransition, markError, markSaved],
+  )
+
+  // ── Reassign an item row's lines to a new bank account ────────────────────
+  // Optimistic: patch localLines so the engine reallocates per-bank flows
+  // immediately. Revert on server error. Undo entry captures the per-line
+  // prior bank so undo restores each original bank even when the row was
+  // previously split across multiple banks.
+  const handleRowBankCommit = useCallback(
+    (lineIds: string[], bankAccountId: string) => {
+      if (lineIds.length === 0) return
+
+      // Snapshot prior bank ids per line (before mutation) for undo.
+      const prevBankIdByLineId: Record<string, string | null> = {}
+      const idSet = new Set(lineIds)
+      let anyChange = false
+      for (const l of localLinesRef.current) {
+        if (!idSet.has(l.id)) continue
+        const prev = l.bankAccountId ?? null
+        prevBankIdByLineId[l.id] = prev
+        if (prev !== bankAccountId) anyChange = true
+      }
+      if (!anyChange) return
+
+      // Optimistic local update — engine recomputes Section 1 + per-bank flows.
+      setLocalLines((prev) =>
+        prev.map((l) => (idSet.has(l.id) ? { ...l, bankAccountId } : l)),
+      )
+
+      // Push undo entry before the server call so Ctrl+Z is available immediately.
+      if (!isReplayingRef.current) {
+        undoStackRef.current.push({
+          kind: 'bank-reassign',
+          lineIds: [...lineIds],
+          prevBankIdByLineId,
+          nextBankAccountId: bankAccountId,
+          label: 'Reassign bank',
+          scenarioId: scenarioId ?? null,
+        })
+      }
+
+      const revert = () => {
+        setLocalLines((prev) =>
+          prev.map((l) =>
+            idSet.has(l.id)
+              ? { ...l, bankAccountId: prevBankIdByLineId[l.id] ?? null }
+              : l,
+          ),
+        )
+      }
+
+      startTransition(() => {
+        updateForecastLinesBank({ lineIds, bankAccountId })
+          .then((res) => {
+            if (res && 'error' in res) {
+              revert()
+              markError(res.error ?? 'Reassign failed')
+            } else {
+              markSaved()
+            }
+          })
+          .catch((err: unknown) => {
+            revert()
+            markError(err instanceof Error ? err.message : 'Network error')
+          })
+      })
+    },
+    [scenarioId, isReplayingRef, undoStackRef, setLocalLines, localLinesRef, startTransition, markError, markSaved],
   )
 
   // ── Group OD facility limit commit ────────────────────────────────────────
@@ -2834,6 +2911,7 @@ export function ForecastGrid({
                 onBankOpeningCommit={handleBankOpeningCommit}
                 onRenameItem={handleRenameItem}
                 onAddLine={handleAddLine}
+                onRowBankCommit={handleRowBankCommit}
               />
             ))}
 
