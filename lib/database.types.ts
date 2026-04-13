@@ -339,6 +339,7 @@ export type Database = {
           group_id: string
           id: string
           is_active: boolean | null
+          is_pipeline_entity: boolean
           name: string
           updated_at: string | null
         }
@@ -348,6 +349,7 @@ export type Database = {
           group_id: string
           id?: string
           is_active?: boolean | null
+          is_pipeline_entity?: boolean
           name: string
           updated_at?: string | null
         }
@@ -357,6 +359,7 @@ export type Database = {
           group_id?: string
           id?: string
           is_active?: boolean | null
+          is_pipeline_entity?: boolean
           name?: string
           updated_at?: string | null
         }
@@ -916,7 +919,11 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      sync_pipeline_project_lines: {
+        Args: { p_lines: Json; p_project_id: string }
+        Returns: Json
+      }
+      update_forecast_line_amounts: { Args: { p_updates: Json }; Returns: Json }
     }
     Enums: {
       document_status:

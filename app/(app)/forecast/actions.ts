@@ -8,6 +8,7 @@ import {
   assertEntityInScope,
   assertForecastLinesInScope,
 } from '@/lib/auth/scope'
+import type { Json } from '@/lib/database.types'
 
 const AMOUNT_MIN = -1_000_000_000
 const AMOUNT_MAX = 1_000_000_000
@@ -121,11 +122,9 @@ export async function updateLineAmounts(
   const supabase = await createClient()
   // Atomic batched update via RPC — either every row updates or none do.
   // Replaces the per-row loop which could leave partial state on failure.
-  const rpc = supabase.rpc as unknown as (
-    name: string,
-    args: unknown,
-  ) => Promise<{ error: { message: string } | null }>
-  const { error } = await rpc('update_forecast_line_amounts', { p_updates: allowed })
+  const { error } = await supabase.rpc('update_forecast_line_amounts', {
+    p_updates: allowed as unknown as Json,
+  })
   if (error) {
     return {
       error: 'Batch update failed',

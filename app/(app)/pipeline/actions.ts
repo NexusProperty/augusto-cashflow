@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { computeSyncLines } from '@/lib/pipeline/sync-engine'
 import { getWeeksInMonth } from '@/lib/pipeline/fiscal-year'
+import type { Json } from '@/lib/database.types'
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -175,15 +176,9 @@ async function syncProject(projectId: string) {
 
   // Atomic delete-then-insert via RPC. All-or-nothing: if the insert fails,
   // the delete rolls back so the project's existing forecast lines survive.
-  // Cast needed because database.types.ts hasn't been regenerated after 021.
-  // Run `npx supabase gen types typescript` to refresh.
-  const rpc = admin.rpc as unknown as (
-    name: string,
-    args: unknown,
-  ) => Promise<{ error: { message: string } | null }>
-  const { error: rpcError } = await rpc('sync_pipeline_project_lines', {
+  const { error: rpcError } = await admin.rpc('sync_pipeline_project_lines', {
     p_project_id: projectId,
-    p_lines: newLines,
+    p_lines: newLines as unknown as Json,
   })
   if (rpcError) {
     throw new Error(`sync_pipeline_project_lines failed: ${rpcError.message}`)
