@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, memo } from 'react'
+import { useMemo, useState, memo } from 'react'
 import { ForecastRow } from './forecast-row'
 import { InlineCell } from './inline-cell'
 import { Badge } from '@/components/ui/badge'
@@ -44,6 +44,74 @@ function getSectionStyle(flowDirection: string) {
   }
 }
 
+// ── EditableLabel ────────────────────────────────────────────────────────────
+// Click-to-edit label used by item rows. Enter/blur commits; Esc cancels.
+// Stays uncontrolled during edit so the parent's optimistic patch doesn't
+// clobber mid-typing.
+
+function EditableLabel({
+  value,
+  onSave,
+  disabled,
+}: {
+  value: string
+  onSave: (next: string) => void
+  disabled?: boolean
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value)
+
+  if (disabled) {
+    return <span>{value}</span>
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          setDraft(value)
+          setEditing(true)
+        }}
+        className="text-left hover:text-indigo-600 focus:text-indigo-600 focus:outline-none"
+        title="Click to rename"
+      >
+        {value}
+      </button>
+    )
+  }
+
+  const commit = () => {
+    setEditing(false)
+    const next = draft.trim()
+    if (next && next !== value) onSave(next)
+  }
+
+  return (
+    <input
+      autoFocus
+      type="text"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          commit()
+        } else if (e.key === 'Escape') {
+          e.preventDefault()
+          setDraft(value)
+          setEditing(false)
+        }
+      }}
+      onClick={(e) => e.stopPropagation()}
+      className="rounded border border-indigo-200 bg-white px-1 py-0 text-sm text-zinc-800 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200"
+      size={Math.max(8, draft.length + 1)}
+    />
+  )
+}
+
 // ── SectionBlock ─────────────────────────────────────────────────────────────
 
 export const SectionBlock = memo(function SectionBlock({
@@ -80,6 +148,8 @@ export const SectionBlock = memo(function SectionBlock({
   localBankBalances,
   summaries,
   onBankOpeningCommit,
+  onRenameItem,
+  onAddLine,
 }: {
   section: Category
   categories: Category[]
@@ -132,6 +202,10 @@ export const SectionBlock = memo(function SectionBlock({
   summaries?: WeekSummary[]
   /** Commit handler for a week-1 bank opening edit. */
   onBankOpeningCommit?: (bankAccountId: string, value: number) => void
+  /** Rename an item row — writes counterparty on every line in the row. */
+  onRenameItem?: (lineIds: string[], newName: string) => void
+  /** Add a new line under a sub-category. Parent resolves entity + period. */
+  onAddLine?: (subCategoryIds: string[]) => void
 }) {
   const style = getSectionStyle(section.flowDirection)
 
@@ -177,6 +251,68 @@ export const SectionBlock = memo(function SectionBlock({
       }),
     [periods, sectionLines, section.flowDirection, summaries],
   )
+
+  // For each editable sub in this section, find the flatRows index of its
+  // LAST row (subtotal if the sub has no items, otherwise the last item/group
+  // row under it). An "+ Add line" row is emitted directly after that index
+  // so it lands at the bottom of the sub's content.
+  const addLineAfterIdx = useMemo(() => {
+    const out = new Map<number, { subId: string; subCategoryIds: string[] }>()
+    let current: { subId: string; subCategoryIds: string[]; lastIdx: number } | null = null
+    const flush = () => {
+      if (current)
+        out.set(current.lastIdx, { subId: current.subId, subCategoryIds: current.subCategoryIds })
+    }
+    for (let i = 0; i < flatRows.length; i++) {
+      const fr = flatRows[i]!
+      if (fr.sectionId !== section.id) continue
+      if (fr.kind === 'subtotal') {
+        flush()
+        current = fr.editable
+          ? { subId: fr.subId, subCategoryIds: fr.subCategoryIds, lastIdx: i }
+          : null
+      } else if (fr.kind === 'item' || fr.kind === 'group') {
+        if (current) current.lastIdx = i
+      } else if (fr.kind === 'bank-opening') {
+        // Balance section has no add-line affordance.
+        flush()
+        current = null
+      }
+    }
+    flush()
+    return out
+  }, [flatRows, section.id])
+
+  const renderAddLineRow = (flatIdx: number) => {
+    const sub = addLineAfterIdx.get(flatIdx)
+    if (!sub || !onAddLine) return null
+    return (
+      <tr
+        key={`addline::${sub.subId}`}
+        className="border-t border-dashed border-zinc-100"
+      >
+        <td className="sticky left-0 z-10 bg-white whitespace-nowrap py-1 pr-4 pl-10">
+          <button
+            type="button"
+            onClick={() => onAddLine(sub.subCategoryIds)}
+            className="text-xs text-zinc-400 hover:text-indigo-600 focus:text-indigo-600 focus:outline-none"
+          >
+            + Add line
+          </button>
+        </td>
+        {periods.map((p, colIdx) => {
+          const { sticky, left } = freezeCellStyle(colIdx, freezeCount)
+          return (
+            <td
+              key={p.id}
+              className={cn('px-2.5 py-1', sticky && 'sticky z-[15] bg-white')}
+              style={sticky ? { left } : undefined}
+            />
+          )
+        })}
+      </tr>
+    )
+  }
 
   return (
     <>
@@ -247,7 +383,7 @@ export const SectionBlock = memo(function SectionBlock({
               const bank = bankAccounts?.find((b) => b.id === fr.bankAccountId)
               const week1Value =
                 localBankBalances?.[fr.bankAccountId] ?? bank?.openingBalance ?? 0
-              return (
+              return [
                 <tr key={`bank-opening::${fr.bankAccountId}`} className="">
                   <td className="sticky left-0 z-10 bg-inherit whitespace-nowrap py-1.5 pr-4 pl-10 text-sm">
                     {fr.bankName}
@@ -322,8 +458,9 @@ export const SectionBlock = memo(function SectionBlock({
                       </td>
                     )
                   })}
-                </tr>
-              )
+                </tr>,
+                renderAddLineRow(flatIdx),
+              ]
             }
 
             // ── Subtotal row ─────────────────────────────────────────────────
@@ -338,7 +475,7 @@ export const SectionBlock = memo(function SectionBlock({
                 subLines.filter((l) => l.periodId === p.id).reduce((sum, l) => sum + l.amount, 0),
               )
 
-              return (
+              return [
                 <tr
                   key={`sub::${sub.id}`}
                   className="bg-zinc-50/50 font-medium border-t border-zinc-100 text-zinc-600"
@@ -388,8 +525,9 @@ export const SectionBlock = memo(function SectionBlock({
                       />
                     )
                   })}
-                </tr>
-              )
+                </tr>,
+                renderAddLineRow(flatIdx),
+              ]
             }
 
 
@@ -403,7 +541,7 @@ export const SectionBlock = memo(function SectionBlock({
               const groupPeriodTotals = periods.map((p) =>
                 memberLines.filter((l) => l.periodId === p.id).reduce((sum, l) => sum + l.amount, 0),
               )
-              return (
+              return [
                 <tr
                   key={`group::${fr.group.id}`}
                   className="bg-indigo-50/40 border-t border-indigo-100 text-indigo-700"
@@ -454,8 +592,9 @@ export const SectionBlock = memo(function SectionBlock({
                       </td>
                     )
                   })}
-                </tr>
-              )
+                </tr>,
+                renderAddLineRow(flatIdx),
+              ]
             }
 
             // ── Item row ─────────────────────────────────────────────────────
@@ -482,7 +621,7 @@ export const SectionBlock = memo(function SectionBlock({
 
             if (isPipeline) {
               // Read-only row — delegate to ForecastRow
-              return (
+              return [
                 <ForecastRow
                   key={key}
                   label={label}
@@ -510,12 +649,13 @@ export const SectionBlock = memo(function SectionBlock({
                     </>
                   }
                   title={overrideTitle ?? (line.counterparty ?? undefined)}
-                />
-              )
+                />,
+                renderAddLineRow(flatIdx),
+              ]
             }
 
             // Editable item row — render directly so we can pass focus props per cell.
-            return (
+            return [
               <tr key={key} className="" title={overrideTitle}>
                 <td className="sticky left-0 z-10 bg-inherit whitespace-nowrap py-1.5 pr-4 text-sm pl-10">
                   {line.source && (
@@ -532,7 +672,11 @@ export const SectionBlock = memo(function SectionBlock({
                       ●
                     </span>
                   )}
-                  {label}
+                  <EditableLabel
+                    value={label}
+                    disabled={!onRenameItem}
+                    onSave={(next) => onRenameItem?.(fr.lineIds, next)}
+                  />
                   {isOverridden && (
                     <span
                       title={overrideTitle}
@@ -622,8 +766,9 @@ export const SectionBlock = memo(function SectionBlock({
                     />
                   )
                 })}
-              </tr>
-            )
+              </tr>,
+              renderAddLineRow(flatIdx),
+            ]
           })}
         </>
       )}

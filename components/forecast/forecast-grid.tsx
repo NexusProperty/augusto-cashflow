@@ -10,6 +10,7 @@ import {
   bulkAddForecastLines,
   bulkUpdateLineStatus,
   deleteForecastLine,
+  renameForecastLines,
   updateLineAmounts,
 } from '@/app/(app)/forecast/actions'
 import {
@@ -826,6 +827,99 @@ export function ForecastGrid({
       handleEmptyCellCreate(template, periodId, amount, 'Create subtotal cell')
     },
     [entities, handleEmptyCellCreate, markError],
+  )
+
+  // ── Rename an item row (counterparty update across every line in it) ──────
+  // Optimistic: patch localLines; revert to prior values on server error.
+  const handleRenameItem = useCallback(
+    (lineIds: string[], newName: string) => {
+      const trimmed = newName.trim()
+      if (!trimmed || lineIds.length === 0) return
+
+      const priorByLine = new Map<string, string | null>()
+      setLocalLines((prev) => {
+        for (const l of prev) {
+          if (lineIds.includes(l.id)) priorByLine.set(l.id, l.counterparty)
+        }
+        return prev.map((l) =>
+          lineIds.includes(l.id) ? { ...l, counterparty: trimmed } : l,
+        )
+      })
+
+      const revert = () => {
+        setLocalLines((prev) =>
+          prev.map((l) =>
+            priorByLine.has(l.id)
+              ? { ...l, counterparty: priorByLine.get(l.id) ?? null }
+              : l,
+          ),
+        )
+      }
+
+      startTransition(() => {
+        renameForecastLines({ lineIds, counterparty: trimmed })
+          .then((result) => {
+            if ('error' in result && result.error) {
+              revert()
+              markError(result.error)
+            }
+          })
+          .catch((err: unknown) => {
+            revert()
+            markError(err instanceof Error ? err.message : 'Rename failed')
+          })
+      })
+    },
+    [setLocalLines, markError],
+  )
+
+  // ── Add a new line under a sub-category ───────────────────────────────────
+  // Creates a line with amount=0 in period[0] and a unique default label
+  // ("New item", "New item 2", …) so the row doesn't merge with an existing
+  // default-label row. User renames via handleRenameItem.
+  const handleAddLine = useCallback(
+    (subCategoryIds: string[]) => {
+      const entity = entities[0]
+      if (!entity) {
+        markError('No entity available — add one in Settings first')
+        return
+      }
+      const categoryId = subCategoryIds[0]
+      const firstPeriod = periods[0]
+      if (!categoryId || !firstPeriod) return
+
+      const subCatSet = new Set(subCategoryIds)
+      const existingLabels = new Set<string>()
+      for (const l of localLines) {
+        if (!subCatSet.has(l.categoryId)) continue
+        existingLabels.add(l.counterparty ?? l.notes ?? 'Line item')
+      }
+      let candidate = 'New item'
+      let n = 2
+      while (existingLabels.has(candidate)) {
+        candidate = `New item ${n}`
+        n += 1
+      }
+
+      const template: ForecastLine = {
+        id: '__pseudo_template__',
+        entityId: entity.id,
+        categoryId,
+        periodId: firstPeriod.id,
+        amount: 0,
+        confidence: 100,
+        source: 'manual',
+        counterparty: candidate,
+        notes: null,
+        sourceDocumentId: null,
+        sourceRuleId: null,
+        sourcePipelineProjectId: null,
+        lineStatus: 'confirmed',
+        formula: null,
+      }
+      handleEmptyCellCreate(template, firstPeriod.id, 0, 'Add line')
+    },
+    [entities, periods, localLines, markError, handleEmptyCellCreate],
   )
 
   // ── Sections + collapsed state ────────────────────────────────────────────
@@ -2738,6 +2832,8 @@ export function ForecastGrid({
                 localBankBalances={localBankBalances}
                 summaries={summaries}
                 onBankOpeningCommit={handleBankOpeningCommit}
+                onRenameItem={handleRenameItem}
+                onAddLine={handleAddLine}
               />
             ))}
 
