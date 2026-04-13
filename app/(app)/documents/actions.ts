@@ -92,15 +92,10 @@ export async function uploadDocument(formData: FormData) {
 
   if (error) return { error: 'Failed to save document record' }
 
-  // Trigger document processing via API route (fire-and-forget)
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
-  fetch(`${appUrl}/api/documents/process`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ documentId: data.id }),
-  }).catch(() => {
-    // Processing can be retried — don't fail the upload
-  })
+  // Processing is triggered from the client after this returns — a
+  // server-side fetch to our own /api/documents/process would not
+  // forward the user's auth cookie and would 401. The client's fetch
+  // carries the cookie automatically.
 
   revalidatePath('/documents')
   return { data }

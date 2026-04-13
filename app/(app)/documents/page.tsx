@@ -4,6 +4,7 @@ import { ExtractionReviewCard } from '@/components/documents/extraction-review-c
 import { AutoConfirmedSection } from '@/components/documents/auto-confirmed-section'
 import { BulkConfirmBar } from '@/components/documents/bulk-confirm-bar'
 import { NeedsAttentionSection } from '@/components/documents/needs-attention-section'
+import { RecentUploadRow } from '@/components/documents/recent-upload-row'
 import { Badge } from '@/components/ui/badge'
 
 export default async function DocumentsPage() {
@@ -106,23 +107,7 @@ export default async function DocumentsPage() {
         <h2 className="mb-3 text-lg font-semibold">Recent Uploads</h2>
         <div className="space-y-2">
           {(documents ?? []).map((doc: any) => (
-            <div key={doc.id} className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white p-3">
-              <div className="flex items-center gap-3">
-                <div>
-                  <p className="text-sm font-medium">{doc.filename}</p>
-                  <p className="text-xs text-zinc-500">
-                    {new Date(doc.created_at).toLocaleDateString('en-NZ')} · {Math.round(doc.file_size / 1024)}KB
-                  </p>
-                </div>
-              </div>
-              <Badge variant={
-                doc.status === 'confirmed' ? 'success' :
-                doc.status === 'failed' ? 'danger' :
-                doc.status === 'ready_for_review' ? 'warning' : 'manual'
-              }>
-                {doc.status}
-              </Badge>
-            </div>
+            <RecentUploadRow key={doc.id} doc={doc} />
           ))}
         </div>
       </div>

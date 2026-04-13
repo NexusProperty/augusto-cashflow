@@ -1,11 +1,14 @@
 'use client'
 
 import { useState, useRef, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
 import { uploadDocument } from '@/app/(app)/documents/actions'
 
 export function UploadZone() {
+  const router = useRouter()
   const [isDragging, setIsDragging] = useState(false)
   const [isPending, startTransition] = useTransition()
+  const [isProcessing, setIsProcessing] = useState(false)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -15,14 +18,42 @@ export function UploadZone() {
       fd.set('file', file)
       startTransition(async () => {
         const result = await uploadDocument(fd)
-        if (result.error) {
-          setMessage({ text: result.error, type: 'error' })
-        } else {
-          setMessage({ text: `${file.name} uploaded — processing...`, type: 'success' })
+        if (result.error || !result.data?.id) {
+          setMessage({ text: result.error ?? 'Upload failed', type: 'error' })
+          return
+        }
+
+        setMessage({ text: `${file.name} uploaded — AI is reading it…`, type: 'success' })
+        setIsProcessing(true)
+        try {
+          const res = await fetch('/api/documents/process', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ documentId: result.data.id }),
+          })
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            setMessage({
+              text: `Processing failed: ${body.error ?? res.statusText}. Click Process on the card below to retry.`,
+              type: 'error',
+            })
+          } else {
+            setMessage({ text: `${file.name} ready for review.`, type: 'success' })
+          }
+        } catch (err) {
+          setMessage({
+            text: `Processing error: ${err instanceof Error ? err.message : 'Network'}. Click Process on the card below to retry.`,
+            type: 'error',
+          })
+        } finally {
+          setIsProcessing(false)
+          router.refresh()
         }
       })
     }
   }
+
+  const busy = isPending || isProcessing
 
   return (
     <div
@@ -38,11 +69,15 @@ export function UploadZone() {
       }}
     >
       <p className="text-sm text-zinc-600">
-        {isPending ? 'Uploading...' : 'Drag & drop files here, or'}
+        {isPending
+          ? 'Uploading…'
+          : isProcessing
+            ? 'AI processing…'
+            : 'Drag & drop files here, or'}
       </p>
       <button
         onClick={() => inputRef.current?.click()}
-        disabled={isPending}
+        disabled={busy}
         className="mt-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50"
       >
         Browse Files
