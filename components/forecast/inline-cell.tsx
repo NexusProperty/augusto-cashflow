@@ -60,6 +60,12 @@ interface InlineCellProps {
   inSelectionRange?: boolean
   /** True when this cell is the selection anchor (first clicked / origin). */
   isAnchor?: boolean
+  /** True when this cell sits in the fill-handle preview area but NOT in the source selection. */
+  isFillPreview?: boolean
+  /** True when this cell is the bottom-right of the selection (renders the handle). */
+  showFillHandle?: boolean
+  /** Called on mousedown of the fill handle to start a fill-drag. */
+  onFillStart?: (e: React.MouseEvent) => void
 }
 
 export const InlineCell = memo(function InlineCell({
@@ -76,6 +82,9 @@ export const InlineCell = memo(function InlineCell({
   colIdx,
   inSelectionRange,
   isAnchor,
+  isFillPreview,
+  showFillHandle,
+  onFillStart,
 }: InlineCellProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -119,10 +128,11 @@ export const InlineCell = memo(function InlineCell({
         data-row={rowIdx}
         data-col={colIdx}
         className={cn(
-          'px-2.5 py-1.5 text-right text-sm tabular-nums outline-none',
+          'relative px-2.5 py-1.5 text-right text-sm tabular-nums outline-none',
           isNegative && 'text-red-600',
           inSelectionRange && !isFocused && (isAnchor ? 'bg-indigo-100' : 'bg-indigo-50'),
           isFocused && 'ring-2 ring-indigo-500',
+          isFillPreview && 'outline outline-2 outline-dashed outline-indigo-400 -outline-offset-2',
           className,
         )}
         onKeyDown={(e) => {
@@ -135,6 +145,17 @@ export const InlineCell = memo(function InlineCell({
         }}
       >
         {formatCurrency(value)}
+        {showFillHandle && (
+          <span
+            data-fill-handle="true"
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              e.preventDefault()
+              onFillStart?.(e)
+            }}
+            className="absolute -bottom-[3px] -right-[3px] z-30 h-[7px] w-[7px] cursor-crosshair rounded-sm bg-indigo-600 ring-1 ring-white"
+          />
+        )}
       </td>
     )
   }
@@ -199,12 +220,13 @@ export const InlineCell = memo(function InlineCell({
       data-row={rowIdx}
       data-col={colIdx}
       className={cn(
-        'cursor-text px-2.5 py-1.5 text-right text-sm tabular-nums outline-none',
+        'relative cursor-text px-2.5 py-1.5 text-right text-sm tabular-nums outline-none',
         statusBg,
         isNegative && 'text-red-600',
         value === 0 && 'text-zinc-400',
         inSelectionRange && !isFocused && (isAnchor ? 'bg-indigo-100' : 'bg-indigo-50'),
         isFocused && 'ring-2 ring-indigo-500',
+        isFillPreview && 'outline outline-2 outline-dashed outline-indigo-400 -outline-offset-2',
         className,
       )}
       onClick={() => enterEdit(String(value))}
@@ -233,6 +255,17 @@ export const InlineCell = memo(function InlineCell({
       }}
     >
       {value === 0 ? '—' : formatCurrency(value)}
+      {showFillHandle && (
+        <span
+          data-fill-handle="true"
+          onMouseDown={(e) => {
+            e.stopPropagation()
+            e.preventDefault()
+            onFillStart?.(e)
+          }}
+          className="absolute -bottom-[3px] -right-[3px] z-30 h-[7px] w-[7px] cursor-crosshair rounded-sm bg-indigo-600 ring-1 ring-white"
+        />
+      )}
     </td>
   )
 })

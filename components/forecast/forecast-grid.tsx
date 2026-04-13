@@ -17,6 +17,7 @@ import {
   type Selection,
 } from '@/lib/forecast/selection'
 import { toTSV, parseTSV, parseClipboardNumber } from '@/lib/forecast/clipboard'
+import { computeFillHandleRange, isInFillRange } from '@/lib/forecast/fill-handle'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
 import type { ForecastLine, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
@@ -201,6 +202,16 @@ export function ForecastGrid({
   // ── Multi-cell selection: mouse drag + Shift+arrow extend ────────────────
   const isDraggingRef = useRef(false)
 
+  // ── Fill-handle drag state ────────────────────────────────────────────────
+  const isFillDraggingRef = useRef(false)
+  const fillSourceRef = useRef<
+    | { rowStart: number; rowEnd: number; colStart: number; colEnd: number }
+    | null
+  >(null)
+  const [fillPreviewRange, setFillPreviewRange] = useState<
+    { rowStart: number; rowEnd: number; colStart: number; colEnd: number } | null
+  >(null)
+
   // Extract {row, col} from a DOM event targeting a cell with data-row/col.
   const cellFromEvent = useCallback((target: EventTarget | null): { row: number; col: number } | null => {
     if (!(target instanceof Element)) return null
@@ -251,6 +262,144 @@ export function ForecastGrid({
       window.removeEventListener('mouseup', onUp)
     }
   }, [cellFromEvent])
+
+  // ── Fill-handle drag: mousedown on handle → track move → commit on up ────
+  const handleFillStart = useCallback(() => {
+    if (!range) return
+    isFillDraggingRef.current = true
+    fillSourceRef.current = { ...range }
+    setFillPreviewRange({ ...range })
+  }, [range])
+
+  useEffect(() => {
+    const rowMax = flatRows.length - 1
+    const colMax = periods.length - 1
+
+    const onMove = (e: MouseEvent) => {
+      if (!isFillDraggingRef.current || !fillSourceRef.current) return
+      const el = document.elementFromPoint(e.clientX, e.clientY)
+      if (!(el instanceof Element)) return
+      const td = el.closest('td[data-row]') as HTMLElement | null
+      if (!td) return
+      const row = Number(td.dataset.row)
+      const col = Number(td.dataset.col)
+      if (!Number.isFinite(row) || !Number.isFinite(col)) return
+      const { previewRange } = computeFillHandleRange({
+        sourceSelection: fillSourceRef.current,
+        mouseCell: { row, col },
+        rowMax,
+        colMax,
+      })
+      setFillPreviewRange((prev) => {
+        if (
+          prev &&
+          prev.rowStart === previewRange.rowStart &&
+          prev.rowEnd === previewRange.rowEnd &&
+          prev.colStart === previewRange.colStart &&
+          prev.colEnd === previewRange.colEnd
+        ) {
+          return prev
+        }
+        return previewRange
+      })
+    }
+
+    const onUp = (e: MouseEvent) => {
+      if (!isFillDraggingRef.current || !fillSourceRef.current) return
+      isFillDraggingRef.current = false
+      // Also make sure the normal selection-drag flag is off (the initial
+      // mousedown on the handle stops propagation so it shouldn't be set,
+      // but belt-and-braces).
+      isDraggingRef.current = false
+
+      const source = fillSourceRef.current
+      fillSourceRef.current = null
+
+      // Find the cell under the mouse at release.
+      const el = document.elementFromPoint(e.clientX, e.clientY)
+      let mouseRow = source.rowEnd
+      let mouseCol = source.colEnd
+      if (el instanceof Element) {
+        const td = el.closest('td[data-row]') as HTMLElement | null
+        if (td) {
+          const r = Number(td.dataset.row)
+          const c = Number(td.dataset.col)
+          if (Number.isFinite(r) && Number.isFinite(c)) {
+            mouseRow = r
+            mouseCol = c
+          }
+        }
+      }
+
+      const { previewRange, targetCells } = computeFillHandleRange({
+        sourceSelection: source,
+        mouseCell: { row: mouseRow, col: mouseCol },
+        rowMax,
+        colMax,
+      })
+
+      // Resolve the source value: bottom-right of the source range.
+      let sourceValue = 0
+      const srcRow = flatRows[source.rowEnd]
+      const srcPeriod = periods[source.colEnd]
+      if (srcRow && srcRow.kind === 'item' && srcPeriod) {
+        const srcLine = srcRow.lineByPeriod.get(srcPeriod.id)
+        if (srcLine) sourceValue = srcLine.amount
+      }
+
+      // Build updates.
+      const updates: Array<{ id: string; amount: number }> = []
+      let skippedPipeline = 0
+      let skippedNoLine = 0
+      let skippedNonItem = 0
+      for (const { row, col } of targetCells) {
+        const fr = flatRows[row]
+        const p = periods[col]
+        if (!fr || !p) continue
+        if (fr.kind !== 'item') {
+          skippedNonItem++
+          continue
+        }
+        if (fr.isPipeline) {
+          skippedPipeline++
+          continue
+        }
+        const line = fr.lineByPeriod.get(p.id)
+        if (!line) {
+          skippedNoLine++
+          continue
+        }
+        if (line.source === 'pipeline') {
+          skippedPipeline++
+          continue
+        }
+        updates.push({ id: line.id, amount: sourceValue })
+      }
+
+      if (updates.length > 0) saveUpdates(updates)
+
+      // Expand the visible selection to the preview range so the user sees
+      // the result as selected.
+      setSelection({
+        anchor: { row: previewRange.rowStart, col: previewRange.colStart },
+        focus: { row: previewRange.rowEnd, col: previewRange.colEnd },
+      })
+      setFillPreviewRange(null)
+
+      if (skippedPipeline + skippedNoLine + skippedNonItem > 0) {
+        console.log(
+          `Fill: wrote ${updates.length} cells (skipped ${skippedPipeline} pipeline, ${skippedNoLine} no-line, ${skippedNonItem} non-item)`,
+        )
+      }
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [flatRows, periods, saveUpdates])
 
   // Click outside the grid clears the selection.
   const gridRootRef = useRef<HTMLDivElement>(null)
@@ -546,6 +695,8 @@ export function ForecastGrid({
                 hideEmpty={hideEmpty}
                 overriddenSet={overriddenSet}
                 overrideScenarioLabel={overrideScenarioLabel}
+                fillPreviewRange={fillPreviewRange}
+                onFillStart={handleFillStart}
               />
             ))}
 
@@ -692,6 +843,8 @@ const SectionBlock = memo(function SectionBlock({
   hideEmpty,
   overriddenSet,
   overrideScenarioLabel,
+  fillPreviewRange,
+  onFillStart,
 }: {
   section: Category
   categories: Category[]
@@ -710,6 +863,8 @@ const SectionBlock = memo(function SectionBlock({
   hideEmpty: boolean
   overriddenSet?: Set<string>
   overrideScenarioLabel?: string
+  fillPreviewRange: { rowStart: number; rowEnd: number; colStart: number; colEnd: number } | null
+  onFillStart: () => void
 }) {
   const style = getSectionStyle(section.flowDirection)
 
@@ -955,6 +1110,16 @@ const SectionBlock = memo(function SectionBlock({
                     focus !== null && focus.row === flatIdx && focus.col === colIdx
                   const inRange = range ? isInRange(range, flatIdx, colIdx) : false
                   const isAnchor = anchor !== null && anchor.row === flatIdx && anchor.col === colIdx
+                  // Show the fill handle on the bottom-right cell of the
+                  // current selection range, but only on editable cells.
+                  const isBottomRight =
+                    range !== null && range.rowEnd === flatIdx && range.colEnd === colIdx
+                  const showHandle = isBottomRight
+                  // Fill preview: in preview range but not in the source (selection).
+                  const inFillPreview =
+                    fillPreviewRange !== null &&
+                    isInFillRange(fillPreviewRange, flatIdx, colIdx) &&
+                    !inRange
                   return (
                     <InlineCell
                       key={p.id}
@@ -980,6 +1145,9 @@ const SectionBlock = memo(function SectionBlock({
                       colIdx={colIdx}
                       inSelectionRange={inRange}
                       isAnchor={isAnchor}
+                      isFillPreview={inFillPreview}
+                      showFillHandle={showHandle}
+                      onFillStart={onFillStart}
                     />
                   )
                 })}
