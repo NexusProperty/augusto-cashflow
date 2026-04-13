@@ -74,10 +74,16 @@ async function syncProject(projectId: string) {
     .select('id, week_ending')
     .order('week_ending')
 
-  const { data: arCategory } = await admin
+  const { data: revenueTrackerCategory } = await admin
     .from('categories')
     .select('id')
-    .eq('code', 'inflows_ar')
+    .eq('code', 'inflows_revenue_tracker')
+    .single()
+
+  const { data: thirdPartyCategory } = await admin
+    .from('categories')
+    .select('id')
+    .eq('code', 'outflows_ap_third_party')
     .single()
 
   const { data: bankAccount } = await admin
@@ -88,7 +94,7 @@ async function syncProject(projectId: string) {
     .limit(1)
     .single()
 
-  if (!arCategory || !bankAccount) return
+  if (!revenueTrackerCategory || !bankAccount) return
 
   type PeriodRow = { id: string; week_ending: string }
   const allWeekEndings = (periods ?? []).map((p) => (p as PeriodRow).week_ending)
@@ -120,6 +126,13 @@ async function syncProject(projectId: string) {
     line_status: string
   }[] = []
 
+  // Total allocation amount — used to prorate third-party costs across allocations.
+  const totalAllocated = (allocations ?? []).reduce(
+    (sum, a) => sum + (Number(a.amount) || 0),
+    0,
+  )
+  const projectThirdPartyCosts = Number(project.third_party_costs) || 0
+
   for (const rawAlloc of allocations ?? []) {
     const allocation = {
       id: rawAlloc.id,
@@ -130,6 +143,12 @@ async function syncProject(projectId: string) {
     }
     const weekEndings = getWeeksInMonth(allWeekEndings, allocation.month)
 
+    // Prorate project third-party costs across this allocation by its share of total billings.
+    const thirdPartyAmount =
+      projectThirdPartyCosts > 0 && totalAllocated > 0
+        ? projectThirdPartyCosts * (allocation.amount / totalAllocated)
+        : 0
+
     const lines = computeSyncLines({
       allocation,
       stage: project.stage as any,
@@ -137,7 +156,9 @@ async function syncProject(projectId: string) {
       projectId: project.id,
       clientName,
       bankAccountId: bankAccount.id,
-      arCategoryId: arCategory.id,
+      revenueTrackerCategoryId: revenueTrackerCategory.id,
+      thirdPartyCategoryId: thirdPartyCategory?.id ?? null,
+      thirdPartyAmount,
       weekEndings,
       periodMap,
     })
