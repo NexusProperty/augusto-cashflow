@@ -287,3 +287,138 @@ describe('planShift — non-item row skipped', () => {
     expect(plan.skipped).toBe(1)
   })
 })
+
+// ── clearSource: false (Ctrl+D / duplicate) tests ────────────────────────────
+
+describe('planShift — clearSource: false, empty target → create only, no source clear', () => {
+  it('one-cell duplicate into an empty target → 0 updates, 1 create (no source clear)', () => {
+    const periods = [makePeriod(0), makePeriod(1), makePeriod(2)]
+
+    const srcLine = makeLine({ id: 'line-src', periodId: 'period-0', amount: 500 })
+    const lineMap = new Map([['period-0', srcLine]])
+    // period-1 has no line → target is empty
+
+    const flatRows: FlatRow[] = [makeItemRow(lineMap)]
+
+    const plan = planShift(keys([0, 0]), 1, flatRows, periods, { clearSource: false })
+
+    // NO source-clear update at all
+    expect(plan.updates).toHaveLength(0)
+
+    // One create for the target period
+    expect(plan.creates).toHaveLength(1)
+    expect(plan.creates[0]).toMatchObject({
+      periodId: 'period-1',
+      amount: 500,
+      sourceLineId: 'line-src',
+    })
+    expect(plan.creates[0]!.tempId).toMatch(/^temp-/)
+
+    expect(plan.collisions).toBe(0)
+    expect(plan.skipped).toBe(0)
+  })
+})
+
+describe('planShift — clearSource: false, existing target → 1 update (target only), collisions=1', () => {
+  it('one-cell duplicate into a non-zero existing target → 1 update (target overwrite), NO source clear, collisions=1', () => {
+    const periods = [makePeriod(0), makePeriod(1)]
+
+    const srcLine = makeLine({ id: 'line-src', periodId: 'period-0', amount: 300 })
+    const tgtLine = makeLine({ id: 'line-tgt', periodId: 'period-1', amount: 999 })
+    const lineMap = new Map([
+      ['period-0', srcLine],
+      ['period-1', tgtLine],
+    ])
+
+    const flatRows: FlatRow[] = [makeItemRow(lineMap)]
+
+    const plan = planShift(keys([0, 0]), 1, flatRows, periods, { clearSource: false })
+
+    expect(plan.creates).toHaveLength(0)
+    // Only 1 update: target overwrite. Source is NOT cleared.
+    expect(plan.updates).toHaveLength(1)
+    expect(plan.updates[0]).toEqual({ id: 'line-tgt', amount: 300 })
+    // Source must NOT be in updates
+    expect(plan.updates.find((u) => u.id === 'line-src')).toBeUndefined()
+    expect(plan.collisions).toBe(1)
+    expect(plan.skipped).toBe(0)
+  })
+})
+
+describe('planShift — clearSource: false, multi-cell mix → update count equals target-overwrites only', () => {
+  it('multi-cell duplicate — update count equals target-overwrite count (not 2× source count)', () => {
+    // Row 0: 3 periods
+    //   col0 (amount 100) → col1 (existing, amount 200): target overwrite (update)
+    //   col1 (amount 200) → col2 (no line): create
+    // With clearSource: false, NO source-clear updates emitted.
+
+    const periods = [makePeriod(0), makePeriod(1), makePeriod(2)]
+
+    const l0 = makeLine({ id: 'l0', periodId: 'period-0', amount: 100 })
+    const l1 = makeLine({ id: 'l1', periodId: 'period-1', amount: 200 })
+    const lineMap = new Map([
+      ['period-0', l0],
+      ['period-1', l1],
+    ])
+
+    const flatRows: FlatRow[] = [makeItemRow(lineMap)]
+
+    const plan = planShift(keys([0, 0], [0, 1]), 1, flatRows, periods, { clearSource: false })
+
+    // col0 → col1 (l1 exists): 1 target-overwrite update
+    // col1 → col2 (empty): 1 create
+    // Sources l0 and l1 must NOT be cleared.
+    expect(plan.creates).toHaveLength(1)
+    expect(plan.creates[0]).toMatchObject({ periodId: 'period-2', amount: 200 })
+
+    // Explicit assertion: updates === number of target-overwrites (1), NOT 2× source count (which would be 2+ or 4)
+    expect(plan.updates).toHaveLength(1)
+    expect(plan.updates[0]).toEqual({ id: 'l1', amount: 100 })
+    // Ensure source IDs are absent from updates
+    expect(plan.updates.find((u) => u.id === 'l0')).toBeUndefined()
+    // l1 must only appear once (overwrite), not twice (overwrite + source-clear)
+    expect(plan.updates.filter((u) => u.id === 'l1')).toHaveLength(1)
+
+    expect(plan.collisions).toBe(1)
+    expect(plan.skipped).toBe(0)
+  })
+})
+
+describe('planShift — clearSource: false, pipeline source → still skipped', () => {
+  it('pipeline source line is skipped even with clearSource: false', () => {
+    const periods = [makePeriod(0), makePeriod(1)]
+
+    const srcLine = makeLine({ id: 'line-src', periodId: 'period-0', amount: 1000, source: 'pipeline' })
+    const lineMap = new Map([['period-0', srcLine]])
+
+    const flatRows: FlatRow[] = [makeItemRow(lineMap)]
+
+    const plan = planShift(keys([0, 0]), 1, flatRows, periods, { clearSource: false })
+
+    expect(plan.updates).toHaveLength(0)
+    expect(plan.creates).toHaveLength(0)
+    expect(plan.skipped).toBe(1)
+  })
+})
+
+describe('planShift — default (no opts) → unchanged shift behaviour (regression guard)', () => {
+  it('calling planShift without opts still clears source and fills target', () => {
+    const periods = [makePeriod(0), makePeriod(1)]
+
+    const srcLine = makeLine({ id: 'line-src', periodId: 'period-0', amount: 400 })
+    const lineMap = new Map([['period-0', srcLine]])
+
+    const flatRows: FlatRow[] = [makeItemRow(lineMap)]
+
+    const plan = planShift(keys([0, 0]), 1, flatRows, periods)
+
+    // Source cleared
+    expect(plan.updates).toHaveLength(1)
+    expect(plan.updates[0]).toEqual({ id: 'line-src', amount: 0 })
+    // Create for empty target
+    expect(plan.creates).toHaveLength(1)
+    expect(plan.creates[0]).toMatchObject({ periodId: 'period-1', amount: 400 })
+    expect(plan.collisions).toBe(0)
+    expect(plan.skipped).toBe(0)
+  })
+})

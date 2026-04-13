@@ -68,6 +68,19 @@ export interface ShiftPlan {
   skipped: number
 }
 
+export interface PlanShiftOpts {
+  /**
+   * When `true` (default), source cells are cleared to 0 after their amount
+   * is copied to the target — classic "shift" / cut-paste semantics.
+   *
+   * When `false`, source cells are left untouched — the source amount is
+   * copied to the target without removing it from the source (duplicate /
+   * Ctrl+D semantics). Only target-overwrite updates and creates are emitted;
+   * no source-clear updates are included in the result.
+   */
+  clearSource?: boolean
+}
+
 /**
  * Plan a shift-by-N-weeks operation.
  *
@@ -75,13 +88,16 @@ export interface ShiftPlan {
  * @param n                 - number of periods to shift (positive = right/forward, negative = left/backward).
  * @param flatRows          - the current flat row list from the grid.
  * @param periods           - the ordered period list from the grid.
+ * @param opts              - optional configuration; see {@link PlanShiftOpts}.
  */
 export function planShift(
   selectedCellKeys: Iterable<string>,
   n: number,
   flatRows: FlatRow[],
   periods: Array<{ id: string }>,
+  opts?: PlanShiftOpts,
 ): ShiftPlan {
+  const clearSource = opts?.clearSource !== false // default true
   const updates: ShiftAmountUpdate[] = []
   const creates: ShiftCreate[] = []
   let collisions = 0
@@ -142,8 +158,10 @@ export function planShift(
       continue
     }
 
-    // Clear the source.
-    updates.push({ id: sourceLine.id, amount: 0 })
+    // Clear the source (only when clearSource is true — shift semantics).
+    if (clearSource) {
+      updates.push({ id: sourceLine.id, amount: 0 })
+    }
 
     if (targetLine) {
       // Update: overwrite the target with the source amount.

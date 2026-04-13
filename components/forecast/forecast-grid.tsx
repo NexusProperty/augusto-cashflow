@@ -134,6 +134,8 @@ export function ForecastGrid({
 
   // Stable ref to handleDeleteSelection — same forward-reference pattern as handleShiftRef.
   const handleDeleteSelectionRef = useRef<() => void>(() => { /* noop until defined below */ })
+  // Stable ref to handleDuplicateRight — same forward-reference pattern as handleShiftRef.
+  const handleDuplicateRightRef = useRef<() => Promise<void>>(async () => { /* noop until defined below */ })
   // Stable ref to selectedCellKeys.size — read in handleGridKeyDown (defined earlier).
   const selectedCellKeysSizeRef = useRef(0)
   const localLinesRef = useRef(localLines)
@@ -1312,6 +1314,20 @@ export function ForecastGrid({
         return
       }
 
+      // ── Ctrl/Cmd+D: duplicate selected cells to the next column ──────────
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey && !e.altKey &&
+        (e.key === 'd' || e.key === 'D')
+      ) {
+        const active = document.activeElement
+        if (active && active.tagName === 'INPUT') return
+        if (selectedCellKeysSizeRef.current === 0) return
+        void handleDuplicateRightRef.current()
+        e.preventDefault()
+        return
+      }
+
       if (!e.shiftKey) return
       if (!selection) return
       // Only act on Shift+Arrow; Shift+Tab etc is handled by the cell itself.
@@ -1739,6 +1755,185 @@ export function ForecastGrid({
   // Keep the ref in sync so handleGridKeyDown (defined earlier) always calls
   // the latest closure of handleShift without needing it in its own deps array.
   useEffect(() => { handleShiftRef.current = handleShift }, [handleShift])
+
+  // ── Duplicate to next column (Ctrl+D) ────────────────────────────────────
+
+  /**
+   * Copy selected cells to the next column (col + 1) without clearing the
+   * source — classic Ctrl+D / "fill right" semantics.
+   *
+   * Auto-overwrites any existing non-pipeline target value (no collision
+   * prompt, consistent with Excel's Ctrl+D behaviour). Fully undoable via
+   * Ctrl+Z (same compound-undo machinery as handleShift).
+   */
+  const handleDuplicateRight = useCallback(async () => {
+    const plan = planShift(selectedCellKeys, 1, flatRows, periods, { clearSource: false })
+
+    if (plan.updates.length === 0 && plan.creates.length === 0) return
+
+    // ── Optimistic local update ───────────────────────────────────────────
+
+    // Apply target-overwrite updates (no source clears in this plan).
+    const oldAmounts = plan.updates.map((u) => ({
+      id: u.id,
+      amount: snapshotRef.current.get(u.id) ?? 0,
+    }))
+    for (const u of plan.updates) snapshotRef.current.set(u.id, u.amount)
+    if (plan.updates.length > 0) applyLocal(plan.updates)
+
+    // Insert optimistic temp lines for creates.
+    const tempLines: ForecastLine[] = plan.creates.map((c) => ({
+      id: c.tempId,
+      entityId: c.entityId,
+      categoryId: c.categoryId,
+      periodId: c.periodId,
+      amount: c.amount,
+      confidence: 100,
+      source: 'manual' as const,
+      counterparty: c.counterparty,
+      notes: c.notes,
+      sourceDocumentId: null,
+      sourceRuleId: null,
+      sourcePipelineProjectId: null,
+      lineStatus: c.lineStatus,
+    }))
+    if (tempLines.length > 0) {
+      setLocalLines((prev) => [...prev, ...tempLines])
+    }
+
+    // ── Server calls ──────────────────────────────────────────────────────
+
+    startTransition(() => {
+      const doDuplicate = async () => {
+        const [updateResult, createResult] = await Promise.all([
+          plan.updates.length > 0
+            ? updateLineAmounts({ updates: plan.updates })
+            : Promise.resolve({ ok: true as const, count: 0 }),
+          plan.creates.length > 0
+            ? bulkAddForecastLines(
+                plan.creates.map((c) => ({
+                  entityId: c.entityId,
+                  categoryId: c.categoryId,
+                  periodId: c.periodId,
+                  amount: c.amount,
+                  counterparty: c.counterparty,
+                  notes: c.notes,
+                  lineStatus: c.lineStatus,
+                  source: 'manual',
+                  confidence: 100,
+                })),
+              )
+            : Promise.resolve({ ok: true as const, data: [] as ForecastLine[] }),
+        ])
+
+        // ── Error handling ────────────────────────────────────────────────
+        if ('error' in updateResult) {
+          applyLocal(oldAmounts)
+          for (const o of oldAmounts) snapshotRef.current.set(o.id, o.amount)
+          if (tempLines.length > 0) {
+            const tempIds = new Set(tempLines.map((l) => l.id))
+            setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
+          }
+          markError(updateResult.error ?? 'Duplicate failed')
+          return
+        }
+
+        if ('error' in createResult) {
+          if (tempLines.length > 0) {
+            const tempIds = new Set(tempLines.map((l) => l.id))
+            setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
+          }
+          if (!isReplayingRef.current && plan.updates.length > 0) {
+            const partialAmountsSub: AtomicUndoEntry = {
+              kind: 'amounts',
+              forward: plan.updates,
+              inverse: oldAmounts,
+              label: 'duplicate amounts (partial)',
+              scenarioId,
+            }
+            undoStackRef.current.push({
+              kind: 'compound',
+              entries: [partialAmountsSub],
+              label: 'Duplicate to next week (partial)',
+              scenarioId,
+            })
+          }
+          markError('Duplicate partially failed — amounts saved, new lines not created')
+          return
+        }
+
+        // ── Success ───────────────────────────────────────────────────────
+        const createdLines = 'data' in createResult ? createResult.data : []
+
+        const responseByKey = new Map<string, ForecastLine>()
+        for (const row of createdLines) {
+          responseByKey.set(`${row.entityId}|${row.categoryId}|${row.periodId}`, row)
+        }
+
+        // Swap temp ids for real ids.
+        if (createdLines.length > 0) {
+          const realByTempId = new Map<string, ForecastLine>()
+          for (const c of plan.creates) {
+            const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
+            const real = responseByKey.get(key)
+            if (real) realByTempId.set(c.tempId, real)
+          }
+          setLocalLines((prev) =>
+            prev.map((l) => {
+              const real = realByTempId.get(l.id)
+              return real ?? l
+            }),
+          )
+          for (const real of createdLines) {
+            if (real) snapshotRef.current.set(real.id, real.amount)
+          }
+        }
+
+        // ── Build and push compound undo entry ────────────────────────────
+        if (!isReplayingRef.current) {
+          const amountsSub: AtomicUndoEntry = {
+            kind: 'amounts',
+            forward: plan.updates,
+            inverse: oldAmounts,
+            label: 'duplicate amounts',
+            scenarioId,
+          }
+
+          const createdSubs: AtomicUndoEntry[] = plan.creates
+            .map((c) => {
+              const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
+              const real = responseByKey.get(key)
+              if (!real) return null
+              return {
+                kind: 'created' as const,
+                tempId: c.tempId,
+                realId: real.id,
+                label: '(inside duplicate)',
+                scenarioId,
+              }
+            })
+            .filter((s): s is NonNullable<typeof s> => s !== null)
+
+          const subEntries: AtomicUndoEntry[] = [amountsSub, ...createdSubs]
+
+          undoStackRef.current.push({
+            kind: 'compound',
+            entries: subEntries,
+            label: 'Duplicate to next week',
+            scenarioId,
+          })
+        }
+
+        markSaved()
+      }
+
+      void doDuplicate()
+    })
+  }, [selectedCellKeys, flatRows, periods, applyLocal, startTransition, markError, markSaved, scenarioId])
+
+  // Keep the ref in sync so handleGridKeyDown (defined earlier) always calls
+  // the latest closure of handleDuplicateRight.
+  useEffect(() => { handleDuplicateRightRef.current = handleDuplicateRight }, [handleDuplicateRight])
 
   // ── Hidden rows count (footer) ────────────────────────────────────────────
 
