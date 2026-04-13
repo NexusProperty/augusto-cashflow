@@ -72,12 +72,17 @@ export default async function ForecastDetailPage({
         categories={data.categories}
         lines={allLines}
         summaries={summaries}
+        entities={(data.entities ?? []).map((e: any) => ({
+          id: String(e.id),
+          name: String(e.name ?? ''),
+        }))}
         weighted={weighted}
         odFacilityLimit={data.entityGroup?.odFacilityLimit ?? 0}
         overriddenIds={Array.from(overriddenIds)}
         overrideScenarioLabel={
           scenarios.find((s) => s.id === params.scenario)?.name ?? undefined
         }
+        scenarioId={params.scenario ?? null}
       />
     </div>
   )

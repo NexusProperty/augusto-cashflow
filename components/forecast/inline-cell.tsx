@@ -229,7 +229,11 @@ export const InlineCell = memo(function InlineCell({
         isFillPreview && 'outline outline-2 outline-dashed outline-indigo-400 -outline-offset-2',
         className,
       )}
-      onClick={() => enterEdit(String(value))}
+      onClick={(e) => {
+        // Modifier-clicks are for selection (grid mousedown handles them).
+        if (e.ctrlKey || e.metaKey || e.shiftKey) return
+        enterEdit(String(value))
+      }}
       onKeyDown={(e) => {
         const result = interpretKeyNotEditing(e)
         switch (result.type) {

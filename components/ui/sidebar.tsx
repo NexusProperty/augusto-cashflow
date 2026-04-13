@@ -28,6 +28,15 @@ function PipelineIcon({ className }: { className?: string }) {
   )
 }
 
+function BookIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+      <path d="M10.75 16.82A7.46 7.46 0 0 1 15 15.5c.71 0 1.39.1 2.03.27.55.14 1.47-.25 1.47-.99V3.66c0-.45-.3-.84-.75-.93a8.97 8.97 0 0 0-6.07.86A.5.5 0 0 0 11.5 4v12.43c0 .26.21.4.42.31.27-.11.55-.2.83-.27v.35Z" />
+      <path d="M9.25 16.82c.27.11.55.2.83.27.21.09.42-.05.42-.31V4a.5.5 0 0 0-.18-.41 8.97 8.97 0 0 0-6.07-.86c-.45.09-.75.48-.75.93V14.78c0 .74.92 1.13 1.47.99A7.46 7.46 0 0 1 5 15.5c1.61 0 3.09.5 4.25 1.32Z" />
+    </svg>
+  )
+}
+
 function CogIcon({ className }: { className?: string }) {
   return (
     <svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
@@ -54,6 +63,7 @@ const pipelineSubItems = [
 ]
 
 const bottomNavItems = [
+  { label: 'Guide', href: '/guide', icon: BookIcon },
   { label: 'Settings', href: '/settings', icon: CogIcon },
 ]
 

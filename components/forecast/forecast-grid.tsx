@@ -4,7 +4,21 @@ import { useTransition, useState, useCallback, useMemo, useEffect, useRef, memo 
 import { ForecastRow } from './forecast-row'
 import { InlineCell } from './inline-cell'
 import { Badge } from '@/components/ui/badge'
-import { updateLineAmounts, addForecastLine } from '@/app/(app)/forecast/actions'
+import {
+  addForecastLine,
+  bulkAddForecastLines,
+  bulkUpdateLineStatus,
+  deleteForecastLine,
+  updateLineAmounts,
+} from '@/app/(app)/forecast/actions'
+import {
+  UndoStack,
+  entryReplayable,
+  groupByPrevStatus,
+  type UndoEntry,
+  type AmountUpdate,
+} from '@/lib/forecast/undo'
+import { computeAggregates, type Aggregates } from '@/lib/forecast/aggregates'
 import { computeWeekSummaries } from '@/lib/forecast/engine'
 import { prorateSubtotal } from '@/lib/forecast/proration'
 import { buildFlatRows, buildItemRows, isFocusable, type FlatRow } from '@/lib/forecast/flat-rows'
@@ -13,13 +27,14 @@ import {
   extendByArrow,
   extendSelection,
   isInRange,
+  iterateRange,
   toRange,
   type Selection,
 } from '@/lib/forecast/selection'
 import { toTSV, parseTSV, parseClipboardNumber } from '@/lib/forecast/clipboard'
 import { computeFillHandleRange, isInFillRange } from '@/lib/forecast/fill-handle'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
-import type { ForecastLine, Period, Category, WeekSummary } from '@/lib/types'
+import type { ForecastLine, LineStatus, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
 
 interface ForecastGridProps {
@@ -27,10 +42,12 @@ interface ForecastGridProps {
   categories: Category[]
   lines: ForecastLine[]
   summaries: WeekSummary[]
+  entities?: Array<{ id: string; name: string }>
   overriddenIds?: string[]
   overrideScenarioLabel?: string
   weighted?: boolean
   odFacilityLimit?: number
+  scenarioId?: string | null
 }
 
 export function ForecastGrid({
@@ -38,15 +55,17 @@ export function ForecastGrid({
   categories,
   lines: linesProp,
   summaries: summariesProp,
+  entities = [],
   overriddenIds,
   overrideScenarioLabel,
   weighted = true,
   odFacilityLimit = 0,
+  scenarioId = null,
 }: ForecastGridProps) {
   const [isPending, startTransition] = useTransition()
 
-  // ── Save status indicator (Saving / Saved / Error) ────────────────────────
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle')
+  // ── Save status indicator (Saving / Saved / Undone / Redone / Error) ────────
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'undone' | 'redone' | 'error'>('idle')
   const [lastSaveError, setLastSaveError] = useState<string | null>(null)
   const saveStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => {
@@ -63,6 +82,18 @@ export function ForecastGrid({
     setLastSaveError(msg)
     if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current)
     saveStatusTimeoutRef.current = setTimeout(() => setSaveStatus('idle'), 4000)
+  }, [])
+  const markUndone = useCallback(() => {
+    setSaveStatus('undone')
+    setLastSaveError(null)
+    if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current)
+    saveStatusTimeoutRef.current = setTimeout(() => setSaveStatus('idle'), 1500)
+  }, [])
+  const markRedone = useCallback(() => {
+    setSaveStatus('redone')
+    setLastSaveError(null)
+    if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current)
+    saveStatusTimeoutRef.current = setTimeout(() => setSaveStatus('idle'), 1500)
   }, [])
 
   // ── Optimistic local state ────────────────────────────────────────────────
@@ -87,6 +118,12 @@ export function ForecastGrid({
     for (const l of linesProp) m.set(l.id, l.amount)
     snapshotRef.current = m
   }, [linesProp, isPending])
+
+  // ── Undo / Redo ───────────────────────────────────────────────────────────
+  const undoStackRef = useRef(new UndoStack())
+  const isReplayingRef = useRef(false)
+  const localLinesRef = useRef(localLines)
+  useEffect(() => { localLinesRef.current = localLines }, [localLines])
 
   // Derive summaries from local state so edits cascade to NetOperating,
   // ClosingBalance, AvailableCash, OD Status immediately.
@@ -130,6 +167,19 @@ export function ForecastGrid({
       // Optimistic UI
       applyLocal(updates)
 
+      // Push undo entry before the transition (not inside .then) so the user
+      // can undo immediately after the optimistic apply. Guard: no push during
+      // a replay so undo/redo don't recurse onto the stack.
+      if (!isReplayingRef.current) {
+        undoStackRef.current.push({
+          kind: 'amounts',
+          forward: updates as AmountUpdate[],
+          inverse: old as AmountUpdate[],
+          label: `Edit ${updates.length} cell${updates.length === 1 ? '' : 's'}`,
+          scenarioId,
+        })
+      }
+
       startTransition(() => {
         updateLineAmounts({ updates })
           .then((res) => {
@@ -139,7 +189,9 @@ export function ForecastGrid({
               // real pre-edit amounts.
               applyLocal(old)
               for (const o of old) snapshotRef.current.set(o.id, o.amount)
-              console.warn('updateLineAmounts failed:', res.error)
+              if (process.env.NODE_ENV === 'development') {
+                console.warn('updateLineAmounts failed:', res.error)
+              }
               markError(res.error ?? 'Save failed')
             } else {
               // Snapshot already holds the optimistic values — nothing more
@@ -150,12 +202,14 @@ export function ForecastGrid({
           .catch((err) => {
             applyLocal(old)
             for (const o of old) snapshotRef.current.set(o.id, o.amount)
-            console.warn('updateLineAmounts threw:', err)
+            if (process.env.NODE_ENV === 'development') {
+              console.warn('updateLineAmounts threw:', err)
+            }
             markError(err instanceof Error ? err.message : 'Network error')
           })
       })
     },
-    [applyLocal, startTransition, markSaved, markError],
+    [applyLocal, startTransition, markSaved, markError, scenarioId],
   )
 
   const handleCellSave = useCallback(
@@ -177,7 +231,7 @@ export function ForecastGrid({
   // clicked period + entered amount. Optimistically added to local state with
   // a temp id, then replaced with the real row on server response.
   const handleEmptyCellCreate = useCallback(
-    (template: ForecastLine, periodId: string, amount: number) => {
+    (template: ForecastLine, periodId: string, amount: number, undoLabel = 'Create cell') => {
       const tempId =
         typeof crypto !== 'undefined' && 'randomUUID' in crypto
           ? `temp-${crypto.randomUUID()}`
@@ -201,6 +255,17 @@ export function ForecastGrid({
 
       setLocalLines((prev) => [...prev, optimisticLine])
 
+      // Push created entry immediately with realId=null; patch it on success.
+      if (!isReplayingRef.current) {
+        undoStackRef.current.push({
+          kind: 'created',
+          tempId,
+          realId: null,
+          label: undoLabel,
+          scenarioId,
+        })
+      }
+
       const fd = new FormData()
       fd.set('entityId', template.entityId)
       fd.set('categoryId', template.categoryId)
@@ -214,6 +279,7 @@ export function ForecastGrid({
           .then((result) => {
             if ('error' in result && result.error) {
               setLocalLines((prev) => prev.filter((l) => l.id !== tempId))
+              undoStackRef.current.removeTempEntry(tempId)
               markError(result.error)
               return
             }
@@ -241,16 +307,53 @@ export function ForecastGrid({
                 prev.map((l) => (l.id === tempId ? real : l)),
               )
               snapshotRef.current.set(real.id, real.amount)
+              undoStackRef.current.patchRealId(tempId, real.id)
               markSaved()
             }
           })
           .catch((err) => {
             setLocalLines((prev) => prev.filter((l) => l.id !== tempId))
+            undoStackRef.current.removeTempEntry(tempId)
             markError(err instanceof Error ? err.message : 'Create failed')
           })
       })
     },
-    [startTransition, markError, markSaved],
+    [startTransition, markError, markSaved, scenarioId],
+  )
+
+  // Editing an empty SUBTOTAL cell (a subcategory with no underlying manual
+  // lines for this period). We synthesise a template using the first active
+  // entity in the group and the subcategory itself, then delegate to the
+  // existing empty-cell create path so optimistic insert, temp-id swap and
+  // error revert behave identically.
+  const handleEmptySubtotalCreate = useCallback(
+    (subCategoryIds: string[], periodId: string, amount: number) => {
+      if (amount === 0) return
+      const entity = entities[0]
+      if (!entity) {
+        markError('No entity available — add one in Settings first')
+        return
+      }
+      const categoryId = subCategoryIds[0]
+      if (!categoryId) return
+      const template: ForecastLine = {
+        id: '__pseudo_template__',
+        entityId: entity.id,
+        categoryId,
+        periodId,
+        amount: 0,
+        confidence: 100,
+        source: 'manual',
+        counterparty: null,
+        notes: null,
+        sourceDocumentId: null,
+        sourceRuleId: null,
+        sourcePipelineProjectId: null,
+        lineStatus: 'confirmed',
+      }
+      handleEmptyCellCreate(template, periodId, amount, 'Create subtotal cell')
+    },
+    [entities, handleEmptyCellCreate, markError],
   )
 
   // ── Sections + collapsed state ────────────────────────────────────────────
@@ -299,6 +402,12 @@ export function ForecastGrid({
   // has anchor === focus; multi-cell has anchor at origin and focus at active.
   const [selection, setSelection] = useState<Selection | null>(null)
   const focus = selection?.focus ?? null
+
+  // Discontiguous additions via Ctrl/Cmd+Click. Kept separate from the
+  // rectangular `selection` so range-shaped operations (paste, fill-handle,
+  // arrow extension) don't have to reason about holes. Keys are `row:col`.
+  const [extraSelected, setExtraSelected] = useState<Set<string>>(new Set())
+  const extraCellKey = useCallback((row: number, col: number) => `${row}:${col}`, [])
 
   // Derive the rectangular range for highlighting.
   const range = useMemo(() => (selection ? toRange(selection) : null), [selection])
@@ -350,17 +459,34 @@ export function ForecastGrid({
     (e: React.MouseEvent) => {
       const cell = cellFromEvent(e.target)
       if (!cell) return
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
+        // Ctrl/Cmd+Click toggles this cell in the extras set without
+        // affecting the rectangular range. Focus moves so keyboard ops
+        // still have a reference. No drag starts.
+        e.preventDefault()
+        const key = extraCellKey(cell.row, cell.col)
+        setExtraSelected((prev) => {
+          const next = new Set(prev)
+          if (next.has(key)) next.delete(key)
+          else next.add(key)
+          return next
+        })
+        setSelection(collapseTo(cell))
+        return
+      }
       if (e.shiftKey && selection) {
         // Extend current selection without starting a drag.
         setSelection((prev) => (prev ? extendSelection(prev, cell) : collapseTo(cell)))
         e.preventDefault()
         return
       }
-      // Begin a fresh drag-selection.
+      // Begin a fresh drag-selection. Plain click also clears extras so
+      // the two selection models don't silently accumulate.
+      setExtraSelected(new Set())
       setSelection(collapseTo(cell))
       isDraggingRef.current = true
     },
-    [cellFromEvent, selection],
+    [cellFromEvent, extraCellKey, selection],
   )
 
   // Global listeners for drag-in-progress (mousemove extends, mouseup ends).
@@ -639,19 +765,182 @@ export function ForecastGrid({
     [flatRows, periods, saveUpdates],
   )
 
+  // ── Undo / Redo replay ────────────────────────────────────────────────────
+
+  const replayUndo = useCallback(async () => {
+    const entry = undoStackRef.current.undo()
+    if (!entry) return
+
+    if (!entryReplayable(entry, scenarioId)) {
+      markError('Skipped: scenario changed')
+      return
+    }
+
+    if (entry.kind === 'created' && entry.realId === null) {
+      markError('Wait — save in flight')
+      // Put the entry back so the user can retry once patchRealId has resolved.
+      // pushUndoPreserveRedo does NOT clear the redo stack (unlike push).
+      undoStackRef.current.pushUndoPreserveRedo(entry)
+      return
+    }
+
+    isReplayingRef.current = true
+    try {
+      if (entry.kind === 'amounts') {
+        saveUpdates(entry.inverse)
+      } else if (entry.kind === 'status') {
+        // Apply locally first (optimistic), then confirm with server.
+        const prevMap = entry.prev
+        const nextStatus = entry.next
+        const idSet = new Set(entry.ids)
+        setLocalLines((cur) =>
+          cur.map((l) => (prevMap.has(l.id) ? { ...l, lineStatus: prevMap.get(l.id)! } : l)),
+        )
+        const batches = groupByPrevStatus(entry.prev)
+        let serverError = false
+        for (const batch of batches) {
+          const res = await bulkUpdateLineStatus({ ids: batch.ids, status: batch.status })
+          if ('error' in res) {
+            markError(res.error)
+            serverError = true
+            break
+          }
+        }
+        if (serverError) {
+          // Roll back the optimistic local flip — restore the `next` status.
+          setLocalLines((cur) =>
+            cur.map((l) => (idSet.has(l.id) ? { ...l, lineStatus: nextStatus } : l)),
+          )
+          return
+        }
+      } else if (entry.kind === 'created') {
+        // realId is guaranteed non-null here (checked above).
+        // Option A: capture the full ForecastLine BEFORE deleting so we can
+        // push a `deleted`-kind entry onto the redo stack.  That way `replayRedo`
+        // hits the existing `deleted` branch which calls bulkAddForecastLines.
+        const lineSnapshot = localLinesRef.current.find((l) => l.id === entry.realId) ?? null
+        const res = await deleteForecastLine(entry.realId!)
+        if (res && 'error' in res) {
+          markError(res.error ?? 'Delete failed')
+          return
+        }
+        setLocalLines((cur) => cur.filter((l) => l.id !== entry.realId))
+        // Push a synthetic `deleted` entry (not the original `created`) so redo
+        // can re-create the line via the existing bulkAddForecastLines path.
+        if (lineSnapshot !== null) {
+          undoStackRef.current.pushRedo({
+            kind: 'deleted',
+            lines: [lineSnapshot],
+            label: entry.label,
+            scenarioId: entry.scenarioId,
+          })
+        }
+        markUndone()
+        return // already pushed redo above; skip the generic pushRedo below
+      } else if (entry.kind === 'deleted') {
+        const result = await bulkAddForecastLines(entry.lines)
+        if ('error' in result) {
+          markError(result.error)
+          return
+        }
+        setLocalLines((cur) => [...cur, ...result.data])
+      }
+      undoStackRef.current.pushRedo(entry)
+      markUndone()
+    } finally {
+      isReplayingRef.current = false
+    }
+  }, [saveUpdates, scenarioId, markError, markUndone])
+
+  const replayRedo = useCallback(async () => {
+    const entry = undoStackRef.current.redo()
+    if (!entry) return
+
+    if (!entryReplayable(entry, scenarioId)) {
+      markError('Skipped: scenario changed')
+      return
+    }
+
+    isReplayingRef.current = true
+    try {
+      if (entry.kind === 'amounts') {
+        saveUpdates(entry.forward)
+      } else if (entry.kind === 'status') {
+        // Apply locally first (optimistic), then confirm with server.
+        // On server error, roll back the optimistic local flip (undo the redo).
+        const nextStatus = entry.next
+        const idSet = new Set(entry.ids)
+        const prevMap = entry.prev
+        setLocalLines((cur) =>
+          cur.map((l) => (idSet.has(l.id) ? { ...l, lineStatus: nextStatus } : l)),
+        )
+        const res = await bulkUpdateLineStatus({ ids: entry.ids, status: entry.next })
+        if ('error' in res) {
+          markError(res.error)
+          // Roll back to the pre-redo (i.e. post-undo) status for each line.
+          setLocalLines((cur) =>
+            cur.map((l) => (prevMap.has(l.id) ? { ...l, lineStatus: prevMap.get(l.id)! } : l)),
+          )
+          return
+        }
+      } else if (entry.kind === 'created') {
+        // Redo of a cell-create: the undo path converts `created` entries to
+        // `deleted` entries on the redo stack (Option A), so this branch is
+        // only reached for legacy entries that never went through an undo.
+        // Silently discard — no full payload available.
+      } else if (entry.kind === 'deleted') {
+        const results = await Promise.all(entry.lines.map((l) => deleteForecastLine(l.id)))
+        const firstErr = results.find((r) => r && 'error' in r)
+        if (firstErr && 'error' in firstErr) {
+          markError((firstErr as { error: string }).error)
+          return
+        }
+        const idsToRemove = new Set(entry.lines.map((l) => l.id))
+        setLocalLines((cur) => cur.filter((l) => !idsToRemove.has(l.id)))
+      }
+      undoStackRef.current.pushUndoAfterRedo(entry)
+      markRedone()
+    } finally {
+      isReplayingRef.current = false
+    }
+  }, [saveUpdates, scenarioId, markError, markRedone])
+
   // Container keydown: Shift+arrow extends; Escape clears; Ctrl/Cmd+C/V copies/pastes.
   const handleGridKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (selection) {
+        if (selection || extraSelected.size > 0) {
           setSelection(null)
+          setExtraSelected(new Set())
           e.preventDefault()
         }
         return
       }
 
-      // ── Clipboard: Ctrl/Cmd+C / Ctrl/Cmd+V ────────────────────────────────
+      // ── Undo / Redo: Ctrl/Cmd+Z / Ctrl/Cmd+Shift+Z / Ctrl/Cmd+Y ─────────────
       const mod = e.ctrlKey || e.metaKey
+      if (mod && (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y')) {
+        const active = document.activeElement
+        if (active && active.tagName === 'INPUT') return
+
+        if ((e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+          e.preventDefault()
+          void replayUndo()
+          return
+        }
+        if ((e.key === 'z' || e.key === 'Z') && e.shiftKey) {
+          e.preventDefault()
+          void replayRedo()
+          return
+        }
+        if (e.key === 'y' || e.key === 'Y') {
+          e.preventDefault()
+          void replayRedo()
+          return
+        }
+      }
+
+      // ── Clipboard: Ctrl/Cmd+C / Ctrl/Cmd+V ────────────────────────────────
       if (mod && (e.key === 'c' || e.key === 'C' || e.key === 'v' || e.key === 'V')) {
         // If focus is inside an editing <input>, let the input handle it natively.
         const active = document.activeElement
@@ -730,7 +1019,7 @@ export function ForecastGrid({
       setSelection((prev) => (prev ? extendByArrow(prev, dir, rowMax, colMax, isFocusableRow) : prev))
       e.preventDefault()
     },
-    [selection, range, flatRows.length, periods.length, isFocusableRow, buildCopyGrid, applyPasteGrid],
+    [selection, extraSelected, range, flatRows.length, periods.length, isFocusableRow, buildCopyGrid, applyPasteGrid, replayUndo, replayRedo],
   )
 
   // ── Subtotal proration handler ────────────────────────────────────────────
@@ -739,7 +1028,8 @@ export function ForecastGrid({
     (subCategoryIds: string[], periodId: string, newTotal: number) => {
       const result = prorateSubtotal(localLines, subCategoryIds, periodId, newTotal)
       if (result.reason === 'no-lines') {
-        console.warn('Subtotal edit: no lines to prorate across — add a line first')
+        // No existing lines for this subcategory in this period — create one.
+        handleEmptySubtotalCreate(subCategoryIds, periodId, newTotal)
         return
       }
       if (result.reason === 'all-pipeline') {
@@ -749,7 +1039,127 @@ export function ForecastGrid({
       if (result.changed.length === 0) return
       saveUpdates(result.changed)
     },
-    [localLines, saveUpdates],
+    [localLines, saveUpdates, handleEmptySubtotalCreate],
+  )
+
+  // ── Multi-cell status change ──────────────────────────────────────────────
+
+  // Union of the range selection and the Ctrl-click extras, as a Set of
+  // `row:col` keys. Used by both the status bar and the highlight test.
+  const selectedCellKeys = useMemo(() => {
+    const keys = new Set<string>(extraSelected)
+    if (range) {
+      for (const { row, col } of iterateRange(range)) {
+        keys.add(extraCellKey(row, col))
+      }
+    }
+    return keys
+  }, [range, extraSelected, extraCellKey])
+
+  const hasAnySelection = selectedCellKeys.size > 0
+
+  // Numeric values behind the current selection, for the aggregate chip.
+  // Item cells contribute the line amount (or 0 for empty). Subtotal cells
+  // contribute the derived per-period total across their sub-categories.
+  // Header and pipeline rows are skipped.
+  const selectionAggregates: Aggregates | null = useMemo(() => {
+    if (selectedCellKeys.size < 2) return null
+    const values: number[] = []
+    for (const key of selectedCellKeys) {
+      const [rowStr, colStr] = key.split(':')
+      const row = Number(rowStr)
+      const col = Number(colStr)
+      const fr = flatRows[row]
+      const period = periods[col]
+      if (!fr || !period) continue
+      if (fr.kind === 'item') {
+        const line = fr.lineByPeriod.get(period.id)
+        values.push(line?.amount ?? 0)
+      } else if (fr.kind === 'subtotal') {
+        const catSet = new Set(fr.subCategoryIds)
+        let total = 0
+        for (const l of localLines) {
+          if (l.periodId === period.id && catSet.has(l.categoryId)) {
+            total += l.amount
+          }
+        }
+        values.push(total)
+      }
+    }
+    if (values.length < 2) return null
+    return computeAggregates(values)
+  }, [selectedCellKeys, flatRows, periods, localLines])
+
+  const handleSetStatus = useCallback(
+    (status: LineStatus) => {
+      const lineIds: string[] = []
+      const seen = new Set<string>()
+      for (const key of selectedCellKeys) {
+        const [rowStr, colStr] = key.split(':')
+        const row = Number(rowStr)
+        const col = Number(colStr)
+        const fr = flatRows[row]
+        const period = periods[col]
+        if (!fr || fr.kind !== 'item' || !period) continue
+        if (fr.isPipeline) continue
+        const line = fr.lineByPeriod.get(period.id)
+        if (!line || line.source === 'pipeline') continue
+        if (seen.has(line.id)) continue
+        seen.add(line.id)
+        lineIds.push(line.id)
+      }
+
+      if (lineIds.length === 0) {
+        markError('No editable lines in the selection')
+        return
+      }
+
+      // Snapshot prev statuses for revert
+      const prev = new Map<string, LineStatus>()
+      const idSet = new Set(lineIds)
+      setLocalLines((cur) =>
+        cur.map((l) => {
+          if (idSet.has(l.id)) {
+            prev.set(l.id, l.lineStatus)
+            return { ...l, lineStatus: status }
+          }
+          return l
+        }),
+      )
+
+      // Push undo entry BEFORE the transition (optimistic apply already done above).
+      if (!isReplayingRef.current) {
+        undoStackRef.current.push({
+          kind: 'status',
+          ids: lineIds,
+          prev,
+          next: status,
+          label: `Status → ${humanStatusLabel(status)} (${lineIds.length} cell${lineIds.length === 1 ? '' : 's'})`,
+          scenarioId,
+        })
+      }
+
+      startTransition(() => {
+        bulkUpdateLineStatus({ ids: lineIds, status })
+          .then((res) => {
+            if ('error' in res) {
+              setLocalLines((cur) =>
+                cur.map((l) => (prev.has(l.id) ? { ...l, lineStatus: prev.get(l.id)! } : l)),
+              )
+              markError(res.error)
+            } else {
+              markSaved()
+            }
+          })
+          .catch((err) => {
+            setLocalLines((cur) =>
+              cur.map((l) => (prev.has(l.id) ? { ...l, lineStatus: prev.get(l.id)! } : l)),
+            )
+            markError(err instanceof Error ? err.message : 'Network error')
+          })
+      })
+    },
+    [selectedCellKeys, flatRows, periods, startTransition, markError, markSaved, scenarioId],
   )
 
   // ── Hidden rows count (footer) ────────────────────────────────────────────
@@ -799,7 +1209,13 @@ export function ForecastGrid({
           </span>
         </div>
         <div className="flex items-center gap-3">
+          <SelectionStatsChip aggregates={selectionAggregates} />
           <SaveStatusChip isPending={isPending} status={saveStatus} error={lastSaveError} />
+          <StatusPicker
+            disabled={!hasAnySelection || isPending}
+            onPick={handleSetStatus}
+            selectedCount={selectedCellKeys.size}
+          />
           <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-500 select-none">
             <input
               type="checkbox"
@@ -838,6 +1254,7 @@ export function ForecastGrid({
                 focus={focus}
                 range={range}
                 anchor={anchor}
+                extraSelected={extraSelected}
                 onCellSave={handleCellSave}
                 onCellClear={handleCellClear}
                 onSubtotalSave={handleSubtotalSave}
@@ -955,7 +1372,7 @@ function SaveStatusChip({
   error,
 }: {
   isPending: boolean
-  status: 'idle' | 'saved' | 'error'
+  status: 'idle' | 'saved' | 'undone' | 'redone' | 'error'
   error: string | null
 }) {
   if (isPending) {
@@ -974,6 +1391,22 @@ function SaveStatusChip({
       </span>
     )
   }
+  if (status === 'undone') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-600 ring-1 ring-inset ring-zinc-300">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-zinc-500" />
+        Undone
+      </span>
+    )
+  }
+  if (status === 'redone') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-600 ring-1 ring-inset ring-zinc-300">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-zinc-500" />
+        Redone
+      </span>
+    )
+  }
   if (status === 'error') {
     return (
       <span
@@ -986,6 +1419,101 @@ function SaveStatusChip({
     )
   }
   return null
+}
+
+function SelectionStatsChip({ aggregates }: { aggregates: Aggregates | null }) {
+  if (!aggregates) return null
+  const avgDisplay = Math.round(aggregates.avg)
+  return (
+    <span
+      title={`Selection: ${aggregates.count} cells`}
+      className="inline-flex items-center gap-3 rounded-md bg-zinc-50 px-2.5 py-1 text-xs font-medium text-zinc-600 ring-1 ring-inset ring-zinc-200 tabular-nums"
+    >
+      <span className="flex items-center gap-1">
+        <span className="text-zinc-400">Σ</span>
+        <span className={aggregates.sum < 0 ? 'text-rose-600' : 'text-zinc-800'}>
+          {formatCurrency(aggregates.sum)}
+        </span>
+      </span>
+      <span className="flex items-center gap-1">
+        <span className="text-zinc-400">⌀</span>
+        <span className={avgDisplay < 0 ? 'text-rose-600' : 'text-zinc-800'}>
+          {formatCurrency(avgDisplay)}
+        </span>
+      </span>
+      <span className="flex items-center gap-1">
+        <span className="text-zinc-400">#</span>
+        <span className="text-zinc-800">{aggregates.count}</span>
+      </span>
+      <span className="flex items-center gap-1">
+        <span className="text-zinc-400">min</span>
+        <span className={aggregates.min < 0 ? 'text-rose-600' : 'text-zinc-800'}>
+          {formatCurrency(aggregates.min)}
+        </span>
+      </span>
+      <span className="flex items-center gap-1">
+        <span className="text-zinc-400">max</span>
+        <span className={aggregates.max < 0 ? 'text-rose-600' : 'text-zinc-800'}>
+          {formatCurrency(aggregates.max)}
+        </span>
+      </span>
+    </span>
+  )
+}
+
+const STATUS_PICK_OPTIONS: Array<{ value: LineStatus; label: string }> = [
+  { value: 'confirmed', label: 'Confirmed' },
+  { value: 'tbc', label: 'TBC' },
+  { value: 'awaiting_payment', label: 'Awaiting Payment' },
+  { value: 'paid', label: 'Paid' },
+  { value: 'remittance_received', label: 'Remittance Received' },
+  { value: 'speculative', label: 'Speculative' },
+  { value: 'awaiting_budget_approval', label: 'Awaiting Budget Approval' },
+  { value: 'none', label: 'Clear status' },
+]
+
+function humanStatusLabel(status: LineStatus): string {
+  return STATUS_PICK_OPTIONS.find((o) => o.value === status)?.label ?? status
+}
+
+function StatusPicker({
+  disabled,
+  onPick,
+  selectedCount,
+}: {
+  disabled: boolean
+  onPick: (status: LineStatus) => void
+  selectedCount: number
+}) {
+  return (
+    <select
+      disabled={disabled}
+      value=""
+      onChange={(e) => {
+        const next = e.target.value as LineStatus | ''
+        if (!next) return
+        onPick(next)
+        e.target.value = ''
+      }}
+      title={
+        disabled
+          ? 'Select one or more cells first (drag, Shift+click or Ctrl+click)'
+          : `Set status on ${selectedCount} cell${selectedCount === 1 ? '' : 's'}`
+      }
+      className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:text-zinc-400"
+    >
+      <option value="">
+        {disabled
+          ? 'Set status…'
+          : `Set status on ${selectedCount} selected…`}
+      </option>
+      {STATUS_PICK_OPTIONS.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  )
 }
 
 function getSectionStyle(flowDirection: string) {
@@ -1028,6 +1556,7 @@ const SectionBlock = memo(function SectionBlock({
   focus,
   range,
   anchor,
+  extraSelected,
   onCellSave,
   onCellClear,
   onCellCreate,
@@ -1049,6 +1578,7 @@ const SectionBlock = memo(function SectionBlock({
   focus: { row: number; col: number } | null
   range: { rowStart: number; rowEnd: number; colStart: number; colEnd: number } | null
   anchor: { row: number; col: number } | null
+  extraSelected: Set<string>
   onCellSave: (lineId: string, amount: number) => void
   onCellClear: (lineId: string) => void
   onCellCreate: (template: ForecastLine, periodId: string, amount: number) => void
@@ -1171,7 +1701,10 @@ const SectionBlock = memo(function SectionBlock({
               ...categories.filter((c) => c.parentId === sub.id).map((c) => c.id),
             ]
             const subLines = sectionLines.filter((l) => subCategoryIds.includes(l.categoryId))
-            const hasEditable = subLines.some((l) => l.source !== 'pipeline')
+            // "Empty" subs stay editable so the user can type a value and have
+            // the grid create the first line. Only "all pipeline" locks it.
+            const hasEditable =
+              subLines.length === 0 || subLines.some((l) => l.source !== 'pipeline')
 
             const flatIdx = flatIndexByKey.get(`sub::${sub.id}`) ?? -1
 
@@ -1305,6 +1838,8 @@ const SectionBlock = memo(function SectionBlock({
                   const isFocusedCell =
                     focus !== null && focus.row === flatIdx && focus.col === colIdx
                   const inRange = range ? isInRange(range, flatIdx, colIdx) : false
+                  const inExtras = extraSelected.has(`${flatIdx}:${colIdx}`)
+                  const inAnySelection = inRange || inExtras
                   const isAnchor = anchor !== null && anchor.row === flatIdx && anchor.col === colIdx
                   // Show the fill handle on the bottom-right cell of the
                   // current selection range, but only on editable cells.
@@ -1345,7 +1880,7 @@ const SectionBlock = memo(function SectionBlock({
                       isFocused={isFocusedCell}
                       rowIdx={flatIdx}
                       colIdx={colIdx}
-                      inSelectionRange={inRange}
+                      inSelectionRange={inAnySelection}
                       isAnchor={isAnchor}
                       isFillPreview={inFillPreview}
                       showFillHandle={showHandle}

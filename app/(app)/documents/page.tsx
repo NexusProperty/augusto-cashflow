@@ -3,6 +3,7 @@ import { UploadZone } from '@/components/documents/upload-zone'
 import { ExtractionReviewCard } from '@/components/documents/extraction-review-card'
 import { AutoConfirmedSection } from '@/components/documents/auto-confirmed-section'
 import { BulkConfirmBar } from '@/components/documents/bulk-confirm-bar'
+import { NeedsAttentionSection } from '@/components/documents/needs-attention-section'
 import { Badge } from '@/components/ui/badge'
 
 export default async function DocumentsPage() {
@@ -91,24 +92,13 @@ export default async function DocumentsPage() {
 
       {/* Tier 3: Needs Attention — incomplete resolution */}
       {needsAttention.length > 0 && (
-        <div className="mt-6">
-          <h2 className="mb-3 text-lg font-semibold">
-            Needs Attention
-            <Badge variant="danger" className="ml-2">{needsAttention.length}</Badge>
-          </h2>
-          <div className="space-y-2">
-            {needsAttention.map((ext: any) => (
-              <ExtractionReviewCard
-                key={ext.id}
-                extraction={ext}
-                entities={entities ?? []}
-                categories={categories ?? []}
-                periods={periods ?? []}
-                bankAccounts={(bankAccounts ?? []) as any /* Supabase join returns entities as array */}
-              />
-            ))}
-          </div>
-        </div>
+        <NeedsAttentionSection
+          extractions={needsAttention as any}
+          entities={entities ?? []}
+          categories={categories ?? []}
+          periods={periods ?? []}
+          bankAccounts={(bankAccounts ?? []) as any /* Supabase join returns entities as array */}
+        />
       )}
 
       {/* Recent Uploads */}

@@ -56,12 +56,18 @@ export function ExtractionReviewCard({
   categories,
   periods,
   bankAccounts,
+  selectable = false,
+  selected = false,
+  onSelectChange,
 }: {
   extraction: Extraction
   entities: Entity[]
   categories: Category[]
   periods: Period[]
   bankAccounts: BankAccount[]
+  selectable?: boolean
+  selected?: boolean
+  onSelectChange?: (next: boolean) => void
 }) {
   const [isPending, startTransition] = useTransition()
   const [dismissed, setDismissed] = useState(false)
@@ -120,23 +126,50 @@ export function ExtractionReviewCard({
     })
   }
 
+  const missing: string[] = []
+  if (!extraction.suggested_entity_id) missing.push('entity')
+  if (!extraction.suggested_bank_account_id) missing.push('bank')
+  if (!extraction.suggested_category_id) missing.push('category')
+  if (!extraction.suggested_period_id) missing.push('week')
+  if (!extraction.suggested_status) missing.push('status')
+
   return (
-    <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+    <div
+      className={`rounded-lg border bg-white p-4 shadow-sm ${
+        selected ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-zinc-200'
+      }`}
+    >
       {/* Header row */}
       <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <p className="text-sm font-semibold text-zinc-900 truncate">
-              {extraction.counterparty ?? 'Unknown counterparty'}
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          {selectable && (
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={(e) => onSelectChange?.(e.target.checked)}
+              aria-label={`Select ${extraction.counterparty ?? 'extraction'}`}
+              className="mt-1 h-4 w-4 shrink-0 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500"
+            />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-semibold text-zinc-900 truncate">
+                {extraction.counterparty ?? 'Unknown counterparty'}
+              </p>
+              <Badge variant={confidencePct >= 80 ? 'success' : confidencePct >= 50 ? 'warning' : 'danger'}>
+                {confidencePct}%
+              </Badge>
+              {missing.map((m) => (
+                <Badge key={m} variant="warning">
+                  No {m}
+                </Badge>
+              ))}
+            </div>
+            <p className="mt-0.5 text-xs text-zinc-500">
+              {extraction.documents?.filename} · {extraction.invoice_number ?? 'No invoice #'}
+              {extraction.expected_date && ` · Due ${extraction.expected_date}`}
             </p>
-            <Badge variant={confidencePct >= 80 ? 'success' : confidencePct >= 50 ? 'warning' : 'danger'}>
-              {confidencePct}%
-            </Badge>
           </div>
-          <p className="mt-0.5 text-xs text-zinc-500">
-            {extraction.documents?.filename} · {extraction.invoice_number ?? 'No invoice #'}
-            {extraction.expected_date && ` · Due ${extraction.expected_date}`}
-          </p>
         </div>
         <p className={`text-lg font-bold whitespace-nowrap ${(extraction.amount ?? 0) >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
           {extraction.amount ? formatCurrency(extraction.amount) : '—'}

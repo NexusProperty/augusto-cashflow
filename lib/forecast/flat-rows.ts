@@ -88,7 +88,11 @@ export function buildFlatRows(
       ]
       const subCategoryIdSet = new Set(subCategoryIds)
       const subLines = lines.filter((l) => subCategoryIdSet.has(l.categoryId))
-      const editable = subLines.some((l) => l.source !== 'pipeline')
+      // Empty subcategories stay editable so the user can type a value into
+      // the subtotal cell and have the grid create the first line for them.
+      // Only "all pipeline" truly locks the row.
+      const editable =
+        subLines.length === 0 || subLines.some((l) => l.source !== 'pipeline')
       rows.push({
         kind: 'subtotal',
         sectionId: section.id,

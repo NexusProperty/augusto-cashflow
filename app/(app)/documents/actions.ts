@@ -3,6 +3,33 @@
 import { requireAuth } from '@/lib/auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { revalidatePath } from 'next/cache'
+import { z } from 'zod'
+
+const LINE_STATUSES = [
+  'none',
+  'confirmed',
+  'tbc',
+  'awaiting_payment',
+  'paid',
+  'remittance_received',
+  'speculative',
+  'awaiting_budget_approval',
+] as const
+
+const BulkUpdateSuggestionsSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(500),
+  updates: z
+    .object({
+      suggestedEntityId: z.string().uuid().optional(),
+      suggestedBankAccountId: z.string().uuid().optional(),
+      suggestedCategoryId: z.string().uuid().optional(),
+      suggestedPeriodId: z.string().uuid().optional(),
+      suggestedStatus: z.enum(LINE_STATUSES).optional(),
+    })
+    .refine((u) => Object.values(u).some((v) => v !== undefined), {
+      message: 'At least one field must be set',
+    }),
+})
 
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
@@ -257,4 +284,166 @@ export async function undoAutoConfirm(extractionId: string) {
   revalidatePath('/documents')
   revalidatePath('/forecast')
   return { ok: true }
+}
+
+/**
+ * Bulk-apply one or more `suggested_*` field values to many pending extractions.
+ * Used by the Needs Attention multi-select bar so the user can fill in the
+ * same missing field (e.g. category, bank account, status) across every
+ * selected card in one click. Fully-resolved items graduate to the Pending
+ * Review tier on the next render.
+ */
+export async function bulkUpdateExtractionSuggestions(
+  ids: string[],
+  updates: {
+    suggestedEntityId?: string
+    suggestedBankAccountId?: string
+    suggestedCategoryId?: string
+    suggestedPeriodId?: string
+    suggestedStatus?: string
+  },
+) {
+  await requireAuth()
+  const parsed = BulkUpdateSuggestionsSchema.safeParse({ ids, updates })
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Invalid input' }
+  }
+
+  const u = parsed.data.updates
+  const patch: {
+    suggested_entity_id?: string
+    suggested_bank_account_id?: string
+    suggested_category_id?: string
+    suggested_period_id?: string
+    suggested_status?: string
+  } = {}
+  if (u.suggestedEntityId) patch.suggested_entity_id = u.suggestedEntityId
+  if (u.suggestedBankAccountId) patch.suggested_bank_account_id = u.suggestedBankAccountId
+  if (u.suggestedCategoryId) patch.suggested_category_id = u.suggestedCategoryId
+  if (u.suggestedPeriodId) patch.suggested_period_id = u.suggestedPeriodId
+  if (u.suggestedStatus) patch.suggested_status = u.suggestedStatus
+
+  const admin = createAdminClient()
+  const { error } = await admin
+    .from('document_extractions')
+    .update(patch)
+    .in('id', parsed.data.ids)
+    .eq('is_confirmed', false)
+    .eq('is_dismissed', false)
+
+  if (error) return { error: 'Failed to update extractions' }
+
+  revalidatePath('/documents')
+  return { ok: true, count: parsed.data.ids.length }
+}
+
+/**
+ * One-click "fill the gap then confirm" for the Needs Attention bar:
+ *  1. Apply bulk suggestion patch to the selected extractions.
+ *  2. For every selected item that's now fully resolved, insert a forecast
+ *     line and mark the extraction confirmed.
+ *  3. Return a count of how many were confirmed vs still missing fields.
+ *
+ * Items that stay incomplete after the patch are left alone and remain in
+ * Needs Attention, so the user can fix them individually.
+ */
+export async function bulkApplyAndConfirm(
+  ids: string[],
+  updates: {
+    suggestedEntityId?: string
+    suggestedBankAccountId?: string
+    suggestedCategoryId?: string
+    suggestedPeriodId?: string
+    suggestedStatus?: string
+  },
+) {
+  const user = await requireAuth()
+  const parsed = BulkUpdateSuggestionsSchema.safeParse({ ids, updates })
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Invalid input' }
+  }
+
+  const u = parsed.data.updates
+  const patch: {
+    suggested_entity_id?: string
+    suggested_bank_account_id?: string
+    suggested_category_id?: string
+    suggested_period_id?: string
+    suggested_status?: string
+  } = {}
+  if (u.suggestedEntityId) patch.suggested_entity_id = u.suggestedEntityId
+  if (u.suggestedBankAccountId) patch.suggested_bank_account_id = u.suggestedBankAccountId
+  if (u.suggestedCategoryId) patch.suggested_category_id = u.suggestedCategoryId
+  if (u.suggestedPeriodId) patch.suggested_period_id = u.suggestedPeriodId
+  if (u.suggestedStatus) patch.suggested_status = u.suggestedStatus
+
+  const admin = createAdminClient()
+
+  if (Object.keys(patch).length > 0) {
+    const { error: patchErr } = await admin
+      .from('document_extractions')
+      .update(patch)
+      .in('id', parsed.data.ids)
+      .eq('is_confirmed', false)
+      .eq('is_dismissed', false)
+    if (patchErr) return { error: 'Failed to update extractions' }
+  }
+
+  // Re-read post-patch so we can decide who's now fully resolved.
+  const { data: extractions, error: fetchErr } = await admin
+    .from('document_extractions')
+    .select('*')
+    .in('id', parsed.data.ids)
+    .eq('is_confirmed', false)
+    .eq('is_dismissed', false)
+
+  if (fetchErr || !extractions) return { error: 'Failed to read extractions' }
+
+  const ready = extractions.filter(
+    (ext) =>
+      ext.suggested_entity_id &&
+      ext.suggested_bank_account_id &&
+      ext.suggested_category_id &&
+      ext.suggested_period_id &&
+      ext.suggested_status,
+  )
+  const stillMissing = extractions.length - ready.length
+
+  let confirmedCount = 0
+  if (ready.length > 0) {
+    const lineRows = ready.map((ext) => ({
+      entity_id: ext.suggested_entity_id!,
+      category_id: ext.suggested_category_id!,
+      period_id: ext.suggested_period_id!,
+      bank_account_id: ext.suggested_bank_account_id!,
+      amount: ext.amount ?? 0,
+      confidence: Math.round((ext.confidence ?? 0.5) * 100),
+      source: 'document' as const,
+      line_status: ext.suggested_status!,
+      source_document_id: ext.document_id,
+      counterparty: ext.counterparty,
+      notes: ext.invoice_number ? `Invoice: ${ext.invoice_number}` : null,
+      created_by: user.id,
+    }))
+
+    const { data: lines, error: lineErr } = await admin
+      .from('forecast_lines')
+      .insert(lineRows)
+      .select()
+
+    if (lineErr || !lines) return { error: 'Failed to create forecast lines' }
+
+    for (let i = 0; i < ready.length; i++) {
+      await admin
+        .from('document_extractions')
+        .update({ is_confirmed: true, forecast_line_id: lines[i]!.id })
+        .eq('id', ready[i]!.id)
+    }
+    confirmedCount = lines.length
+  }
+
+  revalidatePath('/documents')
+  revalidatePath('/forecast')
+  revalidatePath('/forecast/detail')
+  return { ok: true, confirmedCount, stillMissing }
 }
