@@ -183,6 +183,25 @@ export async function loadEntities(supabase: SupabaseClient, groupId: string) {
   return data ?? []
 }
 
+/**
+ * Load only entities flagged `is_pipeline_entity = true` for a group.
+ *
+ * Use this inside the pipeline module (pipeline overview, summary, targets,
+ * Excel import) so that non-pipeline entities like AGC and ENT are excluded
+ * from pipeline UI + sync. Non-pipeline code paths (bank accounts, forecast)
+ * continue to call `loadEntities` and see every active entity.
+ */
+export async function loadPipelineEntities(supabase: SupabaseClient, groupId: string) {
+  const { data } = await supabase
+    .from('entities')
+    .select('id, name, code')
+    .eq('group_id', groupId)
+    .eq('is_active', true)
+    .eq('is_pipeline_entity', true)
+    .order('name')
+  return data ?? []
+}
+
 /** Load forecast periods (week_endings) for building the period map */
 export async function loadForecastPeriods(supabase: SupabaseClient) {
   const { data } = await supabase

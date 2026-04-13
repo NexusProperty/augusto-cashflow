@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import { loadPipelineData, loadEntities } from '@/lib/pipeline/queries'
+import { loadPipelineData, loadPipelineEntities } from '@/lib/pipeline/queries'
 import { getFiscalYearMonths, getCurrentFiscalYear } from '@/lib/pipeline/fiscal-year'
 import { computeBUSummary } from '@/lib/pipeline/summary'
 import { AUGUSTO_GROUP_ID } from '@/lib/types'
@@ -18,7 +18,7 @@ export default async function PipelineSummaryPage({
   const fy = parseInt(params.fy ?? String(currentFY), 10)
   const months = getFiscalYearMonths(fy)
 
-  const entities = await loadEntities(supabase, AUGUSTO_GROUP_ID)
+  const entities = await loadPipelineEntities(supabase, AUGUSTO_GROUP_ID)
   const entityIds = entities.map((e: any) => e.id)
 
   const { projects, targets } = await loadPipelineData(supabase, entityIds, months)
