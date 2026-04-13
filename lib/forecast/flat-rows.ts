@@ -106,11 +106,16 @@ export function buildItemRows(
  * themselves focus-navigable — arrow navigation skips them. Collapsed
  * section bodies are omitted entirely.
  *
- * P3.4: accepts an optional `groups` map. For each sub-category that has
- * groups defined, group-header rows are inserted above the member item rows.
- * When a group is collapsed its member rows are excluded from the list
- * entirely (not just hidden via CSS). Items that are not in any group for
- * their sub-category appear after all group headers for that sub-category.
+ * Emission order per section:
+ *   sectionHeader
+ *   for each sub-category (in sortOrder):
+ *     subtotal
+ *     group headers + their member items (P3.4)
+ *     ungrouped items whose parent sub is this sub
+ *
+ * Items are pinned under their parent sub-category's subtotal, so rendering
+ * never makes a line created under one sub appear to belong to another
+ * (e.g. a Payroll line showing under the trailing Credit Cards subtotal).
  */
 export function buildFlatRows(
   sections: Category[],
@@ -120,6 +125,8 @@ export function buildFlatRows(
   groups?: RowGroupMap,
 ): FlatRow[] {
   const rows: FlatRow[] = []
+  const categoryById = new Map<string, Category>()
+  for (const c of categories) categoryById.set(c.id, c)
 
   for (const section of sections) {
     rows.push({ kind: 'sectionHeader', sectionId: section.id })
@@ -128,6 +135,55 @@ export function buildFlatRows(
     const children = categories
       .filter((c) => c.parentId === section.id)
       .sort((a, b) => a.sortOrder - b.sortOrder)
+    const childIds = new Set(children.map((c) => c.id))
+
+    const { itemMap } = buildItemRows(section, children, categories, lines)
+
+    // Map each itemKey → parent sub.id for this section, so we can interleave
+    // items under their owning subtotal. An item's parent sub is either:
+    //   - the line's categoryId itself (line posted directly to a sub), or
+    //   - the parentId of the line's category (line posted to a grandchild).
+    const itemKeyToSubId = new Map<string, string>()
+    for (const [key, itemLines] of itemMap) {
+      const first = itemLines[0]
+      if (!first) continue
+      if (childIds.has(first.categoryId)) {
+        itemKeyToSubId.set(key, first.categoryId)
+        continue
+      }
+      const parentId = categoryById.get(first.categoryId)?.parentId ?? null
+      if (parentId && childIds.has(parentId)) {
+        itemKeyToSubId.set(key, parentId)
+      }
+    }
+
+    // Reverse lookup: lineId → itemKey, used to resolve group membership.
+    const lineIdToItemKey = new Map<string, string>()
+    for (const [key, itemLines] of itemMap) {
+      for (const l of itemLines) lineIdToItemKey.set(l.id, key)
+    }
+
+    const subGroups = groups ?? {}
+    const emittedItemKeys = new Set<string>()
+
+    const pushItemRow = (key: string) => {
+      const itemLines = itemMap.get(key)
+      if (!itemLines) return
+      // A row is "pipeline-only" only when EVERY line is pipeline-sourced.
+      // A mixed row (manual + pipeline for the same counterparty/category)
+      // stays navigable; per-cell save logic skips pipeline cells while
+      // letting the user edit the manual ones.
+      const isPipeline = itemLines.every((l) => l.source === 'pipeline')
+      const lineByPeriod = new Map(itemLines.map((l) => [l.periodId, l]))
+      rows.push({
+        kind: 'item',
+        sectionId: section.id,
+        itemKey: key,
+        lineIds: itemLines.map((l) => l.id),
+        lineByPeriod,
+        isPipeline,
+      })
+    }
 
     for (const sub of children) {
       const subCategoryIds = [
@@ -148,42 +204,16 @@ export function buildFlatRows(
         subCategoryIds,
         editable,
       })
-    }
 
-    const { itemMap } = buildItemRows(section, children, categories, lines)
-
-    // ── P3.4: group-aware item row insertion ──────────────────────────────────
-    const subGroups = groups ?? {}
-
-    // Build a reverse lookup: lineId → itemKey, so we can determine which
-    // item rows are "claimed" by a group.
-    const lineIdToItemKey = new Map<string, string>()
-    for (const [key, itemLines] of itemMap) {
-      for (const l of itemLines) {
-        lineIdToItemKey.set(l.id, key)
-      }
-    }
-
-    // Track which item keys have been emitted (either inside a group or as
-    // ungrouped rows) to avoid duplicates.
-    const emittedItemKeys = new Set<string>()
-
-    // Emit groups per sub-category, in the order the sub-categories appear.
-    for (const sub of children) {
+      // Groups for this sub.
       const groupsForSub = subGroups[sub.id] ?? []
-      if (groupsForSub.length === 0) continue
-
       for (const group of groupsForSub) {
-        // Resolve which item keys are members of this group and actually exist.
         const memberItemKeys: string[] = []
         for (const lineId of group.lineIds) {
           const key = lineIdToItemKey.get(lineId)
-          if (key && !memberItemKeys.includes(key)) {
-            memberItemKeys.push(key)
-          }
+          if (key && !memberItemKeys.includes(key)) memberItemKeys.push(key)
         }
 
-        // Emit the group header row.
         rows.push({
           kind: 'group',
           sectionId: section.id,
@@ -192,50 +222,33 @@ export function buildFlatRows(
           memberItemKeys,
         })
 
-        // If not collapsed, emit each member item row (and mark as emitted).
         if (!group.collapsed) {
           for (const key of memberItemKeys) {
             if (emittedItemKeys.has(key)) continue
             emittedItemKeys.add(key)
-            const itemLines = itemMap.get(key)
-            if (!itemLines) continue
-            const isPipeline = itemLines.every((l) => l.source === 'pipeline')
-            const lineByPeriod = new Map(itemLines.map((l) => [l.periodId, l]))
-            rows.push({
-              kind: 'item',
-              sectionId: section.id,
-              itemKey: key,
-              lineIds: itemLines.map((l) => l.id),
-              lineByPeriod,
-              isPipeline,
-            })
+            pushItemRow(key)
           }
         } else {
-          // Collapsed: mark members as emitted so they are not re-emitted below.
-          for (const key of memberItemKeys) {
-            emittedItemKeys.add(key)
-          }
+          for (const key of memberItemKeys) emittedItemKeys.add(key)
         }
+      }
+
+      // Ungrouped items that belong to this sub (preserve itemMap order).
+      for (const [key] of itemMap) {
+        if (emittedItemKeys.has(key)) continue
+        if (itemKeyToSubId.get(key) !== sub.id) continue
+        emittedItemKeys.add(key)
+        pushItemRow(key)
       }
     }
 
-    // Emit ungrouped item rows (not yet emitted).
-    for (const [key, itemLines] of itemMap) {
+    // Safety net: any item whose parent sub could not be resolved (e.g. a
+    // line whose category is the section itself). Emit at section end so
+    // it's still visible and navigable rather than dropped silently.
+    for (const [key] of itemMap) {
       if (emittedItemKeys.has(key)) continue
-      // A row is "pipeline-only" only when EVERY line is pipeline-sourced.
-      // A mixed row (manual + pipeline for the same counterparty/category)
-      // stays navigable; per-cell save logic skips pipeline cells while
-      // letting the user edit the manual ones.
-      const isPipeline = itemLines.every((l) => l.source === 'pipeline')
-      const lineByPeriod = new Map(itemLines.map((l) => [l.periodId, l]))
-      rows.push({
-        kind: 'item',
-        sectionId: section.id,
-        itemKey: key,
-        lineIds: itemLines.map((l) => l.id),
-        lineByPeriod,
-        isPipeline,
-      })
+      emittedItemKeys.add(key)
+      pushItemRow(key)
     }
   }
 

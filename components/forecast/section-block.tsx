@@ -156,18 +156,6 @@ export const SectionBlock = memo(function SectionBlock({
     [periods, sectionLines],
   )
 
-  // Build a lookup from flat-row key → flat-row index for passing isFocused and
-  // per-cell focus callbacks down to InlineCell.
-  const flatIndexByKey = useMemo(() => {
-    const m = new Map<string, number>()
-    for (let i = 0; i < flatRows.length; i++) {
-      const r = flatRows[i]!
-      if (r.kind === 'subtotal') m.set(`sub::${r.subId}`, i)
-      else if (r.kind === 'item') m.set(`item::${r.itemKey}`, i)
-    }
-    return m
-  }, [flatRows])
-
   return (
     <>
       {/* Colour-coded collapsible section header */}
@@ -217,51 +205,67 @@ export const SectionBlock = memo(function SectionBlock({
         })}
       </tr>
 
-      {/* Sub-section subtotal rows + data rows — only when not collapsed */}
+      {/* Sub-section subtotals + items + group headers, rendered in flatRows
+          order so items stay pinned under their parent subtotal. */}
       {!collapsed && (
         <>
-          {sectionChildren.map((sub) => {
-            const subCategoryIds = [
-              sub.id,
-              ...categories.filter((c) => c.parentId === sub.id).map((c) => c.id),
-            ]
-            const subLines = sectionLines.filter((l) => subCategoryIds.includes(l.categoryId))
-            // "Empty" subs stay editable so the user can type a value and have
-            // the grid create the first line. Only "all pipeline" locks it.
-            const hasEditable =
-              subLines.length === 0 || subLines.some((l) => l.source !== 'pipeline')
+          {flatRows.map((fr, flatIdx) => {
+            if (fr.sectionId !== section.id) return null
+            if (fr.kind !== 'subtotal' && fr.kind !== 'item' && fr.kind !== 'group') return null
 
-            const flatIdx = flatIndexByKey.get(`sub::${sub.id}`) ?? -1
+            // ── Subtotal row ─────────────────────────────────────────────────
+            if (fr.kind === 'subtotal') {
+              const sub = sectionChildren.find((c) => c.id === fr.subId)
+              if (!sub) return null
+              const subCategoryIdSet = new Set(fr.subCategoryIds)
+              const subLines = sectionLines.filter((l) => subCategoryIdSet.has(l.categoryId))
+              const hasEditable = fr.editable
 
-            // Per-period totals for this sub-section
-            const periodTotals = periods.map((p) =>
-              subLines.filter((l) => l.periodId === p.id).reduce((sum, l) => sum + l.amount, 0),
-            )
+              const periodTotals = periods.map((p) =>
+                subLines.filter((l) => l.periodId === p.id).reduce((sum, l) => sum + l.amount, 0),
+              )
 
-            return (
-              <tr
-                key={sub.id}
-                className="bg-zinc-50/50 font-medium border-t border-zinc-100 text-zinc-600"
-              >
-                <td className="sticky left-0 z-10 bg-inherit whitespace-nowrap py-1.5 pr-4 text-sm pl-6">
-                  {sub.sectionNumber ? `${sub.sectionNumber}. ${sub.name}` : sub.name}
-                </td>
-                {periods.map((p, colIdx) => {
-                  const total = periodTotals[colIdx] ?? 0
-                  const isFocusedCell =
-                    focus !== null && focus.row === flatIdx && focus.col === colIdx
-                  const { sticky, left } = freezeCellStyle(colIdx, freezeCount)
-                  const stickyLeft = sticky ? left : undefined
-                  // Frozen subtotal cells need an opaque bg (row is bg-zinc-50/50 = semi-transparent).
-                  const frozenSubtotalCls = sticky ? 'bg-zinc-50' : undefined
-                  if (!hasEditable) {
+              return (
+                <tr
+                  key={`sub::${sub.id}`}
+                  className="bg-zinc-50/50 font-medium border-t border-zinc-100 text-zinc-600"
+                >
+                  <td className="sticky left-0 z-10 bg-inherit whitespace-nowrap py-1.5 pr-4 text-sm pl-6">
+                    {sub.sectionNumber ? `${sub.sectionNumber}. ${sub.name}` : sub.name}
+                  </td>
+                  {periods.map((p, colIdx) => {
+                    const total = periodTotals[colIdx] ?? 0
+                    const isFocusedCell =
+                      focus !== null && focus.row === flatIdx && focus.col === colIdx
+                    const { sticky, left } = freezeCellStyle(colIdx, freezeCount)
+                    const stickyLeft = sticky ? left : undefined
+                    const frozenSubtotalCls = sticky ? 'bg-zinc-50' : undefined
+                    if (!hasEditable) {
+                      return (
+                        <InlineCell
+                          key={p.id}
+                          value={total}
+                          isComputed
+                          isNegative={total < 0}
+                          onSave={() => {}}
+                          onMoveFocus={(dir) => onMoveFocus(flatIdx, colIdx, dir)}
+                          selection={{ isFocused: isFocusedCell }}
+                          rowIdx={flatIdx}
+                          colIdx={colIdx}
+                          stickyLeft={stickyLeft}
+                          className={frozenSubtotalCls}
+                        />
+                      )
+                    }
+                    // Subtotal InlineCell onSave ignores the formula param
+                    // (subtotals don't support cell-reference formulas).
                     return (
                       <InlineCell
                         key={p.id}
                         value={total}
-                        isComputed
+                        isComputed={false}
                         isNegative={total < 0}
-                        onSave={() => {}}
+                        onSave={(newTotal) => onSubtotalSave(fr.subCategoryIds, p.id, newTotal)}
                         onMoveFocus={(dir) => onMoveFocus(flatIdx, colIdx, dir)}
                         selection={{ isFocused: isFocusedCell }}
                         rowIdx={flatIdx}
@@ -270,33 +274,11 @@ export const SectionBlock = memo(function SectionBlock({
                         className={frozenSubtotalCls}
                       />
                     )
-                  }
-                  // Note: subtotal InlineCell onSave ignores the formula param (second arg)
-                  // because subtotal cells don't support cell-reference formulas.
-                  return (
-                    <InlineCell
-                      key={p.id}
-                      value={total}
-                      isComputed={false}
-                      isNegative={total < 0}
-                      onSave={(newTotal) => onSubtotalSave(subCategoryIds, p.id, newTotal)}
-                      onMoveFocus={(dir) => onMoveFocus(flatIdx, colIdx, dir)}
-                      selection={{ isFocused: isFocusedCell }}
-                      rowIdx={flatIdx}
-                      colIdx={colIdx}
-                      stickyLeft={stickyLeft}
-                      className={frozenSubtotalCls}
-                    />
-                  )
-                })}
-              </tr>
-            )
-          })}
+                  })}
+                </tr>
+              )
+            }
 
-          {/* P3.4: render item rows and group header rows in flatRows order */}
-          {flatRows.map((fr, flatIdx) => {
-            if (fr.sectionId !== section.id) return null
-            if (fr.kind !== 'item' && fr.kind !== 'group') return null
 
             // ── Group header row ─────────────────────────────────────────────
             if (fr.kind === 'group') {
