@@ -4,7 +4,7 @@ import { useTransition, useState, useCallback, useMemo, useEffect, useRef, memo 
 import { ForecastRow } from './forecast-row'
 import { InlineCell } from './inline-cell'
 import { Badge } from '@/components/ui/badge'
-import { updateLineAmounts } from '@/app/(app)/forecast/actions'
+import { updateLineAmounts, addForecastLine } from '@/app/(app)/forecast/actions'
 import { computeWeekSummaries } from '@/lib/forecast/engine'
 import { prorateSubtotal } from '@/lib/forecast/proration'
 import { buildFlatRows, buildItemRows, isFocusable, type FlatRow } from '@/lib/forecast/flat-rows'
@@ -170,6 +170,87 @@ export function ForecastGrid({
       saveUpdates([{ id: lineId, amount: 0 }])
     },
     [saveUpdates],
+  )
+
+  // Editing an EMPTY cell on an existing item row: create a new forecast_line
+  // inheriting the row's template (entity + category + counterparty) and the
+  // clicked period + entered amount. Optimistically added to local state with
+  // a temp id, then replaced with the real row on server response.
+  const handleEmptyCellCreate = useCallback(
+    (template: ForecastLine, periodId: string, amount: number) => {
+      const tempId =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? `temp-${crypto.randomUUID()}`
+          : `temp-${Math.random().toString(36).slice(2)}-${Date.now()}`
+
+      const optimisticLine: ForecastLine = {
+        id: tempId,
+        entityId: template.entityId,
+        categoryId: template.categoryId,
+        periodId,
+        amount,
+        confidence: 100,
+        source: 'manual',
+        counterparty: template.counterparty,
+        notes: template.notes,
+        sourceDocumentId: null,
+        sourceRuleId: null,
+        sourcePipelineProjectId: null,
+        lineStatus: 'confirmed',
+      }
+
+      setLocalLines((prev) => [...prev, optimisticLine])
+
+      const fd = new FormData()
+      fd.set('entityId', template.entityId)
+      fd.set('categoryId', template.categoryId)
+      fd.set('periodId', periodId)
+      fd.set('amount', String(amount))
+      if (template.counterparty) fd.set('counterparty', template.counterparty)
+      if (template.notes) fd.set('notes', template.notes)
+
+      startTransition(() => {
+        addForecastLine(fd)
+          .then((result) => {
+            if ('error' in result && result.error) {
+              setLocalLines((prev) => prev.filter((l) => l.id !== tempId))
+              markError(result.error)
+              return
+            }
+            if ('data' in result && result.data) {
+              const raw = result.data as Record<string, unknown>
+              const real: ForecastLine = {
+                id: String(raw.id),
+                entityId: String(raw.entity_id),
+                categoryId: String(raw.category_id),
+                periodId: String(raw.period_id),
+                amount: Number(raw.amount) || 0,
+                confidence:
+                  typeof raw.confidence === 'number' ? raw.confidence : 100,
+                source: (raw.source as ForecastLine['source']) ?? 'manual',
+                counterparty: (raw.counterparty as string | null) ?? null,
+                notes: (raw.notes as string | null) ?? null,
+                sourceDocumentId: (raw.source_document_id as string | null) ?? null,
+                sourceRuleId: (raw.source_rule_id as string | null) ?? null,
+                sourcePipelineProjectId:
+                  (raw.source_pipeline_project_id as string | null) ?? null,
+                lineStatus:
+                  (raw.line_status as ForecastLine['lineStatus']) ?? 'confirmed',
+              }
+              setLocalLines((prev) =>
+                prev.map((l) => (l.id === tempId ? real : l)),
+              )
+              snapshotRef.current.set(real.id, real.amount)
+              markSaved()
+            }
+          })
+          .catch((err) => {
+            setLocalLines((prev) => prev.filter((l) => l.id !== tempId))
+            markError(err instanceof Error ? err.message : 'Create failed')
+          })
+      })
+    },
+    [startTransition, markError, markSaved],
   )
 
   // ── Sections + collapsed state ────────────────────────────────────────────
@@ -768,6 +849,7 @@ export function ForecastGrid({
                 overrideScenarioLabel={overrideScenarioLabel}
                 fillPreviewRange={fillPreviewRange}
                 onFillStart={handleFillStart}
+                onCellCreate={handleEmptyCellCreate}
               />
             ))}
 
@@ -948,6 +1030,7 @@ const SectionBlock = memo(function SectionBlock({
   anchor,
   onCellSave,
   onCellClear,
+  onCellCreate,
   onSubtotalSave,
   onMoveFocus,
   collapsed,
@@ -968,6 +1051,7 @@ const SectionBlock = memo(function SectionBlock({
   anchor: { row: number; col: number } | null
   onCellSave: (lineId: string, amount: number) => void
   onCellClear: (lineId: string) => void
+  onCellCreate: (template: ForecastLine, periodId: string, amount: number) => void
   onSubtotalSave: (subCategoryIds: string[], periodId: string, newTotal: number) => void
   onMoveFocus: (row: number, col: number, direction: Direction) => void
   collapsed: boolean
@@ -1237,10 +1321,16 @@ const SectionBlock = memo(function SectionBlock({
                       key={p.id}
                       value={amount}
                       isNegative={amount < 0}
-                      isComputed={!cellLine}
+                      isComputed={false}
                       lineStatus={cellLine?.lineStatus}
                       onSave={(newAmount) => {
-                        if (cellLine) onCellSave(cellLine.id, newAmount)
+                        if (cellLine) {
+                          onCellSave(cellLine.id, newAmount)
+                        } else if (newAmount !== 0) {
+                          // Empty cell — create a new line from the row template.
+                          // Skip creates for "" / 0 to avoid noise on accidental tab-throughs.
+                          onCellCreate(line, p.id, newAmount)
+                        }
                       }}
                       onClear={
                         cellLine
