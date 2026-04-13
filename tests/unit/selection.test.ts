@@ -7,8 +7,29 @@ import {
   extendSelection,
   collapseTo,
   extendByArrow,
+  jumpToEdge,
   type Selection,
 } from '@/lib/forecast/selection'
+import type { FlatRow } from '@/lib/forecast/flat-rows'
+import type { ForecastLine } from '@/lib/types'
+
+// Minimal ForecastLine factory for tests — fills only the fields jumpToEdge needs.
+const minLine = (periodId: string, amount: number): ForecastLine =>
+  ({
+    id: `line-${periodId}`,
+    entityId: 'e1',
+    categoryId: 'cat-1',
+    periodId,
+    amount,
+    confidence: 1,
+    source: 'manual',
+    counterparty: null,
+    notes: null,
+    sourceDocumentId: null,
+    sourceRuleId: null,
+    sourcePipelineProjectId: null,
+    lineStatus: 'none',
+  }) as ForecastLine
 
 const cell = (row: number, col: number) => ({ row, col })
 
@@ -186,5 +207,127 @@ describe('selection / extendByArrow', () => {
     const collapsed = collapseTo(extended.focus)
     expect(collapsed.anchor).toEqual(collapsed.focus)
     expect(collapsed.anchor).toEqual({ row: 1, col: 2 })
+  })
+})
+
+// ── jumpToEdge helpers ────────────────────────────────────────────────────────
+
+/** Build a minimal item FlatRow with the given amounts per period index. */
+function makeItemRow(
+  amounts: number[],
+  periods: Array<{ id: string }>,
+): FlatRow & { kind: 'item' } {
+  const lineByPeriod = new Map<string, ForecastLine>()
+  for (let i = 0; i < amounts.length; i++) {
+    const p = periods[i]
+    if (!p) continue
+    if (amounts[i] !== 0) {
+      lineByPeriod.set(p.id, minLine(p.id, amounts[i]!))
+    }
+  }
+  return {
+    kind: 'item',
+    sectionId: 'sec-1',
+    itemKey: 'cat-1::Item',
+    lineIds: [],
+    lineByPeriod,
+    isPipeline: false,
+  }
+}
+
+/** Minimal non-focusable rows. */
+const headerRow: FlatRow = { kind: 'sectionHeader', sectionId: 'sec-1' }
+const subtotalRowNonEditable: FlatRow = {
+  kind: 'subtotal',
+  sectionId: 'sec-1',
+  subId: 'sub-1',
+  subCategoryIds: ['cat-1'],
+  editable: false,
+}
+
+describe('selection / jumpToEdge', () => {
+  // 5-period grid: amounts [0, 100, 200, 300, 0]
+  const periods5 = [
+    { id: 'p0' }, { id: 'p1' }, { id: 'p2' }, { id: 'p3' }, { id: 'p4' },
+  ]
+
+  it('1. arrow-right from non-zero, next also non-zero, then zeros → jumps to end of non-zero run', () => {
+    // col layout: [0]=0, [1]=100, [2]=200, [3]=300, [4]=0
+    // Start at col 1 (non-zero). Run ends at col 3. col 4 is zero.
+    const row = makeItemRow([0, 100, 200, 300, 0], periods5)
+    const flat: FlatRow[] = [row]
+    const result = jumpToEdge(0, 1, 'right', flat, periods5)
+    expect(result).toEqual({ row: 0, col: 3 })
+  })
+
+  it('2. arrow-right from non-zero, very next cell is zero → no-op', () => {
+    // col layout: [0]=100, [1]=0, [2]=200, [3]=300, [4]=0
+    // Start at col 0 (non-zero). Next is col 1 (zero) → stay at col 0.
+    const row = makeItemRow([100, 0, 200, 300, 0], periods5)
+    const flat: FlatRow[] = [row]
+    const result = jumpToEdge(0, 0, 'right', flat, periods5)
+    expect(result).toEqual({ row: 0, col: 0 })
+  })
+
+  it('3. arrow-right from zero, first non-zero is 3 columns away → jumps there', () => {
+    // col layout: [0]=0, [1]=0, [2]=0, [3]=500, [4]=0
+    // Start at col 0. First non-zero going right is col 3.
+    const row = makeItemRow([0, 0, 0, 500, 0], periods5)
+    const flat: FlatRow[] = [row]
+    const result = jumpToEdge(0, 0, 'right', flat, periods5)
+    expect(result).toEqual({ row: 0, col: 3 })
+  })
+
+  it('4. arrow-right from zero, all cells to right are zero → jumps to last column', () => {
+    const row = makeItemRow([0, 0, 0, 0, 0], periods5)
+    const flat: FlatRow[] = [row]
+    const result = jumpToEdge(0, 0, 'right', flat, periods5)
+    expect(result).toEqual({ row: 0, col: 4 }) // grid edge
+  })
+
+  it('5a. arrow-left from non-zero, prev cells non-zero, then zero → jumps to start of run', () => {
+    // col layout: [0]=0, [1]=100, [2]=200, [3]=300, [4]=0
+    // Start at col 3. Walk left: col 2 non-zero, col 1 non-zero, col 0 is zero → stop at 1.
+    const row = makeItemRow([0, 100, 200, 300, 0], periods5)
+    const flat: FlatRow[] = [row]
+    const result = jumpToEdge(0, 3, 'left', flat, periods5)
+    expect(result).toEqual({ row: 0, col: 1 })
+  })
+
+  it('5b. arrow-left from zero, first non-zero to the left → jumps there', () => {
+    // col layout: [0]=0, [1]=0, [2]=100, [3]=0, [4]=0
+    // Start at col 4 (zero). First non-zero going left is col 2.
+    const row = makeItemRow([0, 0, 100, 0, 0], periods5)
+    const flat: FlatRow[] = [row]
+    const result = jumpToEdge(0, 4, 'left', flat, periods5)
+    expect(result).toEqual({ row: 0, col: 2 })
+  })
+
+  it('6. arrow-down from non-zero item, skips non-focusable subtotal, reaches another non-zero → jumps past subtotal', () => {
+    // rows: [0] item(100), [1] non-editable subtotal (non-focusable), [2] item(200)
+    // Start at row 0 (non-zero). Next focusable is row 2 (non-zero) → stops at row 2.
+    const row0 = makeItemRow([100], [periods5[0]!])
+    const row2 = makeItemRow([200], [periods5[0]!])
+    const flat: FlatRow[] = [row0, subtotalRowNonEditable, row2]
+    const periods1 = [periods5[0]!]
+    const result = jumpToEdge(0, 0, 'down', flat, periods1)
+    expect(result).toEqual({ row: 2, col: 0 })
+  })
+
+  it('7. arrow-up from row 0 → no-op (clamps at row 0)', () => {
+    const row = makeItemRow([100, 200], periods5.slice(0, 2))
+    const flat: FlatRow[] = [row]
+    const result = jumpToEdge(0, 0, 'up', flat, periods5.slice(0, 2))
+    expect(result).toEqual({ row: 0, col: 0 })
+  })
+
+  it('8. no focusable rows in the direction → clamps at grid edge, preserves column', () => {
+    // Only row 0 is focusable. Arrow-down should return row 0 (no focusable below).
+    const row0 = makeItemRow([100], [periods5[0]!])
+    const flat: FlatRow[] = [row0, headerRow]
+    const periods1 = [periods5[0]!]
+    const result = jumpToEdge(0, 0, 'down', flat, periods1)
+    // No focusable below, current is non-zero, next focusable doesn't exist → no-op
+    expect(result).toEqual({ row: 0, col: 0 })
   })
 })

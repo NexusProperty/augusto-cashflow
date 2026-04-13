@@ -28,6 +28,7 @@ import {
   extendSelection,
   isInRange,
   iterateRange,
+  jumpToEdge,
   toRange,
   type Selection,
 } from '@/lib/forecast/selection'
@@ -1328,6 +1329,54 @@ export function ForecastGrid({
         return
       }
 
+      // ── Ctrl+Home: jump to first focusable cell ─────────────────────────
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === 'Home') {
+        const active = document.activeElement
+        if (active && active.tagName === 'INPUT') return
+        for (let r = 0; r < flatRows.length; r++) {
+          if (isFocusable(flatRows[r])) {
+            setSelection(collapseTo({ row: r, col: 0 }))
+            break
+          }
+        }
+        e.preventDefault()
+        return
+      }
+
+      // ── Ctrl+End: jump to last focusable cell ────────────────────────────
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === 'End') {
+        const active = document.activeElement
+        if (active && active.tagName === 'INPUT') return
+        for (let r = flatRows.length - 1; r >= 0; r--) {
+          if (isFocusable(flatRows[r])) {
+            setSelection(collapseTo({ row: r, col: periods.length - 1 }))
+            break
+          }
+        }
+        e.preventDefault()
+        return
+      }
+
+      // ── Ctrl+Arrow: Excel-style edge jump ───────────────────────────────
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+        const dir: 'up' | 'down' | 'left' | 'right' | null =
+          e.key === 'ArrowUp' ? 'up'
+          : e.key === 'ArrowDown' ? 'down'
+          : e.key === 'ArrowLeft' ? 'left'
+          : e.key === 'ArrowRight' ? 'right'
+          : null
+        if (dir) {
+          const active = document.activeElement
+          if (active && active.tagName === 'INPUT') return
+          if (!selection) return
+          const { row, col } = selection.focus
+          const next = jumpToEdge(row, col, dir, flatRows, periods)
+          setSelection(collapseTo(next))
+          e.preventDefault()
+          return
+        }
+      }
+
       if (!e.shiftKey) return
       if (!selection) return
       // Only act on Shift+Arrow; Shift+Tab etc is handled by the cell itself.
@@ -1348,7 +1397,7 @@ export function ForecastGrid({
       setSelection((prev) => (prev ? extendByArrow(prev, dir, rowMax, colMax, isFocusableRow) : prev))
       e.preventDefault()
     },
-    [selection, extraSelected, range, flatRows.length, periods.length, isFocusableRow, buildCopyGrid, applyPasteGrid, replayUndo, replayRedo],
+    [selection, extraSelected, range, flatRows, periods, isFocusableRow, buildCopyGrid, applyPasteGrid, replayUndo, replayRedo],
   )
 
   // ── Subtotal proration handler ────────────────────────────────────────────
