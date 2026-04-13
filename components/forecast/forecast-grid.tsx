@@ -43,7 +43,27 @@ export function ForecastGrid({
   weighted = true,
   odFacilityLimit = 0,
 }: ForecastGridProps) {
-  const [, startTransition] = useTransition()
+  const [isPending, startTransition] = useTransition()
+
+  // ── Save status indicator (Saving / Saved / Error) ────────────────────────
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle')
+  const [lastSaveError, setLastSaveError] = useState<string | null>(null)
+  const saveStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current)
+  }, [])
+  const markSaved = useCallback(() => {
+    setSaveStatus('saved')
+    setLastSaveError(null)
+    if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current)
+    saveStatusTimeoutRef.current = setTimeout(() => setSaveStatus('idle'), 1500)
+  }, [])
+  const markError = useCallback((msg: string) => {
+    setSaveStatus('error')
+    setLastSaveError(msg)
+    if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current)
+    saveStatusTimeoutRef.current = setTimeout(() => setSaveStatus('idle'), 4000)
+  }, [])
 
   // ── Optimistic local state ────────────────────────────────────────────────
   const [localLines, setLocalLines] = useState<ForecastLine[]>(linesProp)
@@ -102,18 +122,21 @@ export function ForecastGrid({
               // Revert optimistic application on failure
               applyLocal(old)
               console.warn('updateLineAmounts failed:', res.error)
+              markError(res.error ?? 'Save failed')
             } else {
               // Commit to snapshot so next revert uses latest server state
               for (const u of updates) snapshotRef.current.set(u.id, u.amount)
+              markSaved()
             }
           })
           .catch((err) => {
             applyLocal(old)
             console.warn('updateLineAmounts threw:', err)
+            markError(err instanceof Error ? err.message : 'Network error')
           })
       })
     },
-    [applyLocal, startTransition],
+    [applyLocal, startTransition, markSaved, markError],
   )
 
   const handleCellSave = useCallback(
@@ -649,15 +672,18 @@ export function ForecastGrid({
             <span className="inline-block h-3 w-3 rounded border border-orange-300 bg-orange-50" /> Awaiting Budget Approval
           </span>
         </div>
-        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-500 select-none">
-          <input
-            type="checkbox"
-            checked={hideEmpty}
-            onChange={(e) => setHideEmpty(e.target.checked)}
-            className="h-3.5 w-3.5 rounded border-zinc-300 accent-blue-600"
-          />
-          Hide empty rows
-        </label>
+        <div className="flex items-center gap-3">
+          <SaveStatusChip isPending={isPending} status={saveStatus} error={lastSaveError} />
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-500 select-none">
+            <input
+              type="checkbox"
+              checked={hideEmpty}
+              onChange={(e) => setHideEmpty(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-zinc-300 accent-blue-600"
+            />
+            Hide empty rows
+          </label>
+        </div>
       </div>
 
       <div className="overflow-x-auto rounded-b-lg border border-t-0 border-zinc-200">
@@ -793,6 +819,47 @@ export function ForecastGrid({
 }
 
 // ── Section colour config ────────────────────────────────────────────────────
+
+// ── Save status chip ─────────────────────────────────────────────────────────
+
+function SaveStatusChip({
+  isPending,
+  status,
+  error,
+}: {
+  isPending: boolean
+  status: 'idle' | 'saved' | 'error'
+  error: string | null
+}) {
+  if (isPending) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-600">
+        <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-500" />
+        Saving…
+      </span>
+    )
+  }
+  if (status === 'saved') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+        Saved
+      </span>
+    )
+  }
+  if (status === 'error') {
+    return (
+      <span
+        title={error ?? undefined}
+        className="inline-flex items-center gap-1.5 rounded-md bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-600/20"
+      >
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-rose-500" />
+        Save failed
+      </span>
+    )
+  }
+  return null
+}
 
 function getSectionStyle(flowDirection: string) {
   switch (flowDirection) {
