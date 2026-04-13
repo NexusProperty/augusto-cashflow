@@ -9,6 +9,8 @@ export const UpdateLineAmountsSchema = z.object({
       z.object({
         id: z.string().uuid(),
         amount: z.coerce.number().min(AMOUNT_MIN).max(AMOUNT_MAX),
+        /** Optional formula text (e.g. =SUM(W1:W4)). Null clears any existing formula. */
+        formula: z.string().max(500).nullable().optional(),
       }),
     )
     .min(1)

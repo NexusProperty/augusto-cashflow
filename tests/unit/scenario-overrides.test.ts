@@ -17,6 +17,7 @@ function line(overrides: Partial<ForecastLine> & { id: string; periodId: string 
     sourceRuleId: null,
     sourcePipelineProjectId: null,
     lineStatus: 'confirmed',
+    formula: null,
     ...overrides,
   }
 }

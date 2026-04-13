@@ -33,6 +33,7 @@ describe('detectAlerts', () => {
       counterparty: 'Trade Finance', notes: null,
       sourceDocumentId: null, sourceRuleId: null, sourcePipelineProjectId: null,
       lineStatus: 'confirmed',
+      formula: null,
     }]
     const alerts = detectAlerts(summaries, lines)
     const cliffAlert = alerts.find((a) => a.type === 'cash_cliff')

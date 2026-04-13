@@ -46,6 +46,7 @@ function mapForecastLine(row: any): ForecastLine {
     sourceRuleId: row.source_rule_id,
     sourcePipelineProjectId: row.source_pipeline_project_id ?? null,
     lineStatus: row.line_status ?? 'confirmed',
+    formula: (row.formula as string | null) ?? null,
   }
 }
 

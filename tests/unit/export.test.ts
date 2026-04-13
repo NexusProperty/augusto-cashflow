@@ -46,6 +46,7 @@ function mkLine(
     sourceRuleId: null,
     sourcePipelineProjectId: null,
     lineStatus: 'none',
+    formula: null,
   }
 }
 

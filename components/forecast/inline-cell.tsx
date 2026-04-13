@@ -10,16 +10,34 @@ import {
 import { evaluateFormula } from '@/lib/forecast/formula'
 
 type ParseResult =
-  | { ok: true; value: number }
+  | { ok: true; value: number; isFormula: boolean; formulaText: string | null }
   | { ok: false; error: string }
 
-function parseInput(draft: string): ParseResult {
+function parseInput(draft: string, currentValue?: number): ParseResult {
   const trimmed = draft.trim()
   if (!trimmed) return { ok: false, error: 'Empty' }
-  if (trimmed.startsWith('=')) return evaluateFormula(trimmed)
+  if (trimmed.startsWith('=')) {
+    const result = evaluateFormula(trimmed)
+    if (!result.ok) {
+      // If the only failure reason is missing context (cell references), allow
+      // the formula to be stored anyway — the grid's cascade will evaluate it
+      // with full context on the next render. Use the current cell value as
+      // the amount placeholder so the display doesn't flicker to 0.
+      if (result.error.includes('context') || result.error.includes('Context')) {
+        return {
+          ok: true,
+          value: currentValue ?? 0,
+          isFormula: true,
+          formulaText: trimmed,
+        }
+      }
+      return result
+    }
+    return { ok: true, value: result.value, isFormula: true, formulaText: trimmed }
+  }
   const num = parseFloat(trimmed)
   if (isNaN(num)) return { ok: false, error: 'Not a number' }
-  return { ok: true, value: num }
+  return { ok: true, value: num, isFormula: false, formulaText: null }
 }
 
 export { interpretKeyEditing, interpretKeyNotEditing } from './inline-cell-keys'
@@ -44,7 +62,14 @@ const statusStyles: Record<LineStatus, string> = {
 
 interface InlineCellProps {
   value: number
-  onSave: (newValue: number) => void
+  /**
+   * Called when the user commits an edit.
+   * - `newValue` is the evaluated numeric result.
+   * - `formula` is the formula text (e.g. `=SUM(W1:W4)`) when the input
+   *   started with `=`; `null` when the user typed a plain number (clears
+   *   any previously stored formula on the line).
+   */
+  onSave: (newValue: number, formula: string | null) => void
   isNegative?: boolean
   isComputed?: boolean
   lineStatus?: LineStatus
@@ -79,6 +104,12 @@ interface InlineCellProps {
   stickyLeft?: number
   /** Right-click handler — used by forecast-grid to open the split-cell modal. */
   onContextMenu?: (e: React.MouseEvent) => void
+  /**
+   * Optional formula stored on this cell's forecast line (e.g. `=SUM(W1:W4)`).
+   * When set, an `=` indicator is rendered at the top-left of the cell, and
+   * entering edit mode pre-populates the editor with the formula text.
+   */
+  formula?: string | null
 }
 
 function FillHandle({
@@ -128,6 +159,7 @@ export const InlineCell = memo(function InlineCell({
   note,
   stickyLeft,
   onContextMenu,
+  formula,
 }: InlineCellProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -154,12 +186,16 @@ export const InlineCell = memo(function InlineCell({
 
   // Returns true on successful save (or no-op), false on parse error (stay editing).
   const commitDraft = (): boolean => {
-    const parsed = parseInput(draft)
+    const parsed = parseInput(draft, value)
     if (!parsed.ok) {
       setInputError(parsed.error)
       return false
     }
-    if (parsed.value !== value) onSave(parsed.value)
+    // Formula path: pass the formula text so the caller can persist it.
+    // Plain-number path: pass null to clear any existing formula on this line.
+    if (parsed.value !== value || parsed.formulaText !== (formula ?? null)) {
+      onSave(parsed.value, parsed.formulaText)
+    }
     return true
   }
 
@@ -263,10 +299,20 @@ export const InlineCell = memo(function InlineCell({
   const statusBg = value !== 0 ? statusStyles[lineStatus ?? 'none'] : 'hover:bg-zinc-50'
   const frozenBg = stickyLeft !== undefined ? 'bg-white' : undefined
 
+  // When the cell has a formula, open the editor showing the formula text so
+  // the user can edit the expression. For plain cells, fall back to the numeric
+  // string as before.
   const enterEdit = (initialDraft?: string) => {
-    setDraft(initialDraft ?? String(value))
+    const initial = initialDraft ?? (formula ? formula : String(value))
+    setDraft(initial)
     setEditing(true)
   }
+
+  // Compose the title attribute: show formula and/or note, newline-separated.
+  const titleParts: string[] = []
+  if (formula) titleParts.push(formula)
+  if (note) titleParts.push(note)
+  const cellTitle = titleParts.length > 0 ? titleParts.join('\n\n') : undefined
 
   return (
     <td
@@ -274,6 +320,7 @@ export const InlineCell = memo(function InlineCell({
       tabIndex={0}
       data-row={rowIdx}
       data-col={colIdx}
+      title={cellTitle}
       className={cn(
         'relative cursor-text px-2.5 py-1.5 text-right text-sm tabular-nums outline-none',
         frozenBg,
@@ -292,7 +339,8 @@ export const InlineCell = memo(function InlineCell({
       onClick={(e) => {
         // Modifier-clicks are for selection (grid mousedown handles them).
         if (e.ctrlKey || e.metaKey || e.shiftKey) return
-        enterEdit(String(value))
+        // For formula cells, open editor with the formula text (not the evaluated number).
+        enterEdit(formula ?? String(value))
       }}
       onKeyDown={(e) => {
         const result = interpretKeyNotEditing(e)
@@ -319,12 +367,19 @@ export const InlineCell = memo(function InlineCell({
       }}
     >
       {value === 0 ? '—' : formatCurrency(value)}
+      {formula && (
+        <span
+          aria-label="Has formula"
+          className="absolute top-0.5 left-1 text-[10px] font-mono text-indigo-500 pointer-events-none leading-none"
+        >
+          =
+        </span>
+      )}
       {showFillHandle && (
         <FillHandle onFillStart={onFillStart} onFillDoubleClick={onFillDoubleClick} />
       )}
       {note && (
         <span
-          title={note}
           aria-label="Has note"
           className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-amber-500 ring-1 ring-white pointer-events-none"
         />

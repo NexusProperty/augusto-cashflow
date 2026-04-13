@@ -30,6 +30,7 @@ const line = (
   sourceRuleId: null,
   sourcePipelineProjectId: null,
   lineStatus: 'confirmed',
+  formula: null,
 })
 
 const categories: Category[] = [

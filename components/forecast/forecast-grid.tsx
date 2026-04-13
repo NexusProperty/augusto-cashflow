@@ -37,6 +37,8 @@ import { computeFillHandleRange, isInFillRange, detectPattern, materialisePatter
 import { planShift, type ShiftAmountUpdate, type ShiftCreate } from '@/lib/forecast/shift-by-weeks'
 import { planSplitCell, parseSplitAmounts, type SplitCellPlan } from '@/lib/forecast/split-cell'
 import { buildMatchList, nextMatchIndex, prevMatchIndex, type FindMatch } from '@/lib/forecast/find'
+import { buildDependencyGraph, topologicalOrder, findDependents } from '@/lib/forecast/dep-graph'
+import { evaluateFormula, type EvalContext } from '@/lib/forecast/formula'
 import { buildCsv } from '@/lib/forecast/export'
 import { FindBar } from './find-bar'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
@@ -350,6 +352,11 @@ export function ForecastGrid({
   const selectedCellKeysSizeRef = useRef(0)
   const localLinesRef = useRef(localLines)
   useEffect(() => { localLinesRef.current = localLines }, [localLines])
+  // Stable refs for flatRows, formulaGraph, and periods so saveUpdates (declared before
+  // the useMemos) can access the latest values without TDZ / hook-ordering issues.
+  const flatRowsRef = useRef<FlatRow[]>([])
+  const formulaGraphRef = useRef<Map<string, string[]>>(new Map())
+  const periodsRef = useRef(periods)
 
   // Derive summaries from local state so edits cascade to NetOperating,
   // ClosingBalance, AvailableCash, OD Status immediately.
@@ -367,31 +374,174 @@ export function ForecastGrid({
 
   // ── Save plumbing ─────────────────────────────────────────────────────────
 
-  const applyLocal = useCallback((updates: Array<{ id: string; amount: number }>) => {
+  const applyLocal = useCallback((updates: Array<{ id: string; amount: number; formula?: string | null }>) => {
     setLocalLines((prev) => {
-      const m = new Map(updates.map((u) => [u.id, u.amount]))
-      return prev.map((l) => (m.has(l.id) ? { ...l, amount: m.get(l.id)! } : l))
+      const m = new Map(updates.map((u) => [u.id, u]))
+      return prev.map((l) => {
+        const u = m.get(l.id)
+        if (!u) return l
+        // Only update formula when it's explicitly provided in the update.
+        const formulaUpdate = u.formula !== undefined ? { formula: u.formula } : {}
+        return { ...l, amount: u.amount, ...formulaUpdate }
+      })
     })
   }, [])
 
+  /**
+   * Given a set of direct edits (already applied optimistically to `localLines`
+   * via `applyLocal`), compute cascade re-evaluations for all formula-bearing
+   * lines that transitively depend on those edited lineIds.
+   *
+   * Returns an array of additional `{ id, amount, formula }` updates to include
+   * in the same server batch, OR `{ error: string }` if a cycle is detected.
+   *
+   * NOTE: The snapshot passed in (`linesSnapshot`) should be the ALREADY-UPDATED
+   * local lines (post-applyLocal) so formula evaluation sees the new values.
+   */
+  /**
+   * Given a set of direct edits (already applied optimistically to `localLines`
+   * via `applyLocal`), compute cascade re-evaluations for all formula-bearing
+   * lines that transitively depend on those edited lineIds.
+   *
+   * All data needed for evaluation (flatRows, periods) is passed explicitly so
+   * this callback can be declared before those useMemo values are computed.
+   *
+   * Returns an array of additional `{ id, amount, formula }` updates to include
+   * in the same server batch, OR `{ error: string }` if a cycle is detected.
+   */
+  const computeCascade = useCallback(
+    (
+      editedLineIds: string[],
+      linesSnapshot: ForecastLine[],
+      graph: Map<string, string[]>,
+      currentFlatRows: FlatRow[],
+      currentPeriods: Array<{ id: string }>,
+    ): Array<{ id: string; amount: number; formula: string }> | { error: string } => {
+      const dependentIds = findDependents(graph, editedLineIds)
+      if (dependentIds.length === 0) return []
+
+      // Build a subgraph covering just the dependents + their own deps.
+      const subgraph = new Map<string, string[]>()
+      for (const id of dependentIds) {
+        subgraph.set(id, graph.get(id) ?? [])
+      }
+      const topoResult = topologicalOrder(subgraph)
+      if ('error' in topoResult) {
+        return { error: 'Cycle detected in formula dependencies' }
+      }
+
+      // Build a mutable amount map seeded from the updated snapshot.
+      const amountMap = new Map<string, number>()
+      for (const l of linesSnapshot) amountMap.set(l.id, l.amount)
+
+      // Build lineId → line map for fast lookups.
+      const lineById = new Map(linesSnapshot.map((l) => [l.id, l]))
+
+      const results: Array<{ id: string; amount: number; formula: string }> = []
+
+      // Walk in topological order — deps evaluated before formulas that read them.
+      for (const lineId of topoResult.order) {
+        if (!dependentIds.includes(lineId)) continue
+        const depLine = lineById.get(lineId)
+        if (!depLine?.formula) continue
+
+        // Build a minimal EvalContext for this formula line.
+        const label = depLine.counterparty ?? depLine.notes ?? 'Line item'
+        const currentItemKey = `${depLine.categoryId}::${label}`
+
+        // Find the FlatRow for the current item.
+        const currentFlatRow = currentFlatRows.find(
+          (r) => r.kind === 'item' && r.itemKey === currentItemKey,
+        )
+        if (!currentFlatRow || currentFlatRow.kind !== 'item') continue
+
+        const ctx: EvalContext = {
+          currentRow: currentFlatRow as EvalContext['currentRow'],
+          flatRows: currentFlatRows,
+          periods: currentPeriods,
+          getAmount: (itemKey: string, periodId: string) => {
+            // Find the line for this itemKey + periodId from the snapshot.
+            // Use the mutable amountMap so cascade-updated values feed forward.
+            const matchLine = linesSnapshot.find((l) => {
+              const lLabel = l.counterparty ?? l.notes ?? 'Line item'
+              return `${l.categoryId}::${lLabel}` === itemKey && l.periodId === periodId
+            })
+            if (!matchLine) return 0
+            return amountMap.get(matchLine.id) ?? 0
+          },
+        }
+
+        const result = evaluateFormula(depLine.formula, ctx)
+        if (!result.ok) {
+          // Evaluation error on a dependent formula — skip cascade for this line.
+          continue
+        }
+
+        // Update the mutable map so downstream formulas see the new value.
+        amountMap.set(lineId, result.value)
+        results.push({ id: lineId, amount: result.value, formula: depLine.formula })
+      }
+
+      return results
+    },
+    [],
+  )
+
   const saveUpdates = useCallback(
-    (updates: Array<{ id: string; amount: number }>) => {
+    (updates: Array<{ id: string; amount: number; formula?: string | null }>) => {
       if (updates.length === 0) return
       // Capture pre-edit values for potential revert. Done BEFORE we mutate
       // snapshotRef so a concurrent second save sees the latest optimistic
       // state — not the pre-first-save values.
-      const old = updates.map((u) => ({
-        id: u.id,
-        amount: snapshotRef.current.get(u.id) ?? 0,
-      }))
+      // Also snapshot the prior formula for each updated line so undo can restore it.
+      const old = updates.map((u) => {
+        const priorLine = localLinesRef.current.find((l) => l.id === u.id)
+        return {
+          id: u.id,
+          amount: snapshotRef.current.get(u.id) ?? 0,
+          // Only include formula in the inverse if this update is changing it.
+          // That way undo restores the exact prior formula state.
+          ...(u.formula !== undefined ? { formula: priorLine?.formula ?? null } : {}),
+        }
+      })
 
       // Promote the optimistic values into the snapshot immediately. If a
       // second save fires before this one's .then resolves, it will capture
       // THIS edit's new values in its own `old`, not the stale pre-edit ones.
       for (const u of updates) snapshotRef.current.set(u.id, u.amount)
 
-      // Optimistic UI
+      // Optimistic UI — apply direct edits first.
       applyLocal(updates)
+
+      // ── Formula cascade ──────────────────────────────────────────────────
+      // After applying the direct edits, re-evaluate any formula cells that
+      // transitively depend on the edited cells. The results are merged into
+      // the same server batch and undo entry so the whole operation is atomic.
+      const editedIds = updates.map((u) => u.id)
+      const cascadeResult = computeCascade(
+        editedIds,
+        localLinesRef.current,
+        formulaGraphRef.current,
+        flatRowsRef.current,
+        periodsRef.current,
+      )
+
+      let cascadeUpdates: Array<{ id: string; amount: number; formula: string }> = []
+      if ('error' in cascadeResult) {
+        // Cycle detected — revert the direct edit and surface the error.
+        applyLocal(old)
+        for (const o of old) snapshotRef.current.set(o.id, o.amount)
+        markError(cascadeResult.error)
+        return
+      } else {
+        cascadeUpdates = cascadeResult
+        if (cascadeUpdates.length > 0) {
+          applyLocal(cascadeUpdates)
+          for (const u of cascadeUpdates) snapshotRef.current.set(u.id, u.amount)
+        }
+      }
+
+      const allUpdates = [...updates, ...cascadeUpdates]
 
       // Push undo entry before the transition (not inside .then) so the user
       // can undo immediately after the optimistic apply. Guard: no push during
@@ -399,22 +549,29 @@ export function ForecastGrid({
       if (!isReplayingRef.current) {
         undoStackRef.current.push({
           kind: 'amounts',
-          forward: updates as AmountUpdate[],
+          forward: allUpdates as AmountUpdate[],
           inverse: old as AmountUpdate[],
           label: `Edit ${updates.length} cell${updates.length === 1 ? '' : 's'}`,
           scenarioId,
         })
       }
 
+      // Build cascade-old for revert: the pre-edit values for cascade lines.
+      const cascadeOld = cascadeUpdates.map((u) => ({
+        id: u.id,
+        amount: old.find((o) => o.id === u.id)?.amount ?? (snapshotRef.current.get(u.id) ?? 0),
+        formula: u.formula, // cascade keeps same formula — restore it on revert
+      }))
+
       startTransition(() => {
-        updateLineAmounts({ updates })
+        updateLineAmounts({ updates: allUpdates })
           .then((res) => {
             if ('error' in res) {
               // Revert local state AND the snapshot — the server never
               // accepted these values, so subsequent saves must see the
               // real pre-edit amounts.
-              applyLocal(old)
-              for (const o of old) snapshotRef.current.set(o.id, o.amount)
+              applyLocal([...old, ...cascadeOld])
+              for (const o of [...old, ...cascadeOld]) snapshotRef.current.set(o.id, o.amount)
               if (process.env.NODE_ENV === 'development') {
                 console.warn('updateLineAmounts failed:', res.error)
               }
@@ -426,8 +583,8 @@ export function ForecastGrid({
             }
           })
           .catch((err) => {
-            applyLocal(old)
-            for (const o of old) snapshotRef.current.set(o.id, o.amount)
+            applyLocal([...old, ...cascadeOld])
+            for (const o of [...old, ...cascadeOld]) snapshotRef.current.set(o.id, o.amount)
             if (process.env.NODE_ENV === 'development') {
               console.warn('updateLineAmounts threw:', err)
             }
@@ -435,12 +592,12 @@ export function ForecastGrid({
           })
       })
     },
-    [applyLocal, startTransition, markSaved, markError, scenarioId],
+    [applyLocal, computeCascade, startTransition, markSaved, markError, scenarioId],
   )
 
   const handleCellSave = useCallback(
-    (lineId: string, amount: number) => {
-      saveUpdates([{ id: lineId, amount }])
+    (lineId: string, amount: number, formula?: string | null) => {
+      saveUpdates([{ id: lineId, amount, ...(formula !== undefined ? { formula } : {}) }])
     },
     [saveUpdates],
   )
@@ -634,6 +791,19 @@ export function ForecastGrid({
     () => buildFlatRows(sections, categories, localLines, collapsed),
     [sections, categories, localLines, collapsed],
   )
+
+  // ── Formula dependency graph ───────────────────────────────────────────────
+  // Rebuilt whenever localLines changes. Cheap: pure graph scan, no evaluation.
+  const formulaGraph = useMemo(
+    () => buildDependencyGraph(localLines, flatRows, periods),
+    [localLines, flatRows, periods],
+  )
+
+  // Keep refs in sync so saveUpdates (defined before these useMemos) can
+  // access the latest flatRows / formulaGraph / periods without TDZ issues.
+  useEffect(() => { flatRowsRef.current = flatRows }, [flatRows])
+  useEffect(() => { formulaGraphRef.current = formulaGraph }, [formulaGraph])
+  useEffect(() => { periodsRef.current = periods }, [periods])
 
   // ── Find derived state ────────────────────────────────────────────────────
   const matches = useMemo(
@@ -3382,7 +3552,7 @@ const SectionBlock = memo(function SectionBlock({
   range: { rowStart: number; rowEnd: number; colStart: number; colEnd: number } | null
   anchor: { row: number; col: number } | null
   extraSelected: Set<string>
-  onCellSave: (lineId: string, amount: number) => void
+  onCellSave: (lineId: string, amount: number, formula?: string | null) => void
   onCellClear: (lineId: string) => void
   onCellCreate: (template: ForecastLine, periodId: string, amount: number) => void
   onSubtotalSave: (subCategoryIds: string[], periodId: string, newTotal: number) => void
@@ -3573,6 +3743,8 @@ const SectionBlock = memo(function SectionBlock({
                       />
                     )
                   }
+                  // Note: subtotal InlineCell onSave ignores the formula param (second arg)
+                  // because subtotal cells don't support cell-reference formulas.
                   return (
                     <InlineCell
                       key={p.id}
@@ -3704,9 +3876,10 @@ const SectionBlock = memo(function SectionBlock({
                       isNegative={amount < 0}
                       isComputed={false}
                       lineStatus={cellLine?.lineStatus}
-                      onSave={(newAmount) => {
+                      formula={cellLine?.formula}
+                      onSave={(newAmount, newFormula) => {
                         if (cellLine) {
-                          onCellSave(cellLine.id, newAmount)
+                          onCellSave(cellLine.id, newAmount, newFormula ?? undefined)
                         } else if (newAmount !== 0) {
                           // Empty cell — create a new line from the row template.
                           // Skip creates for "" / 0 to avoid noise on accidental tab-throughs.

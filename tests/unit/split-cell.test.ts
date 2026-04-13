@@ -20,6 +20,7 @@ function makeLine(overrides: Partial<ForecastLine> = {}): ForecastLine {
     sourceRuleId: null,
     sourcePipelineProjectId: null,
     lineStatus: 'confirmed',
+    formula: null,
     ...overrides,
   }
 }

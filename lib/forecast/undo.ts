@@ -8,6 +8,8 @@ import type { ForecastLine, LineStatus } from '@/lib/types'
 export interface AmountUpdate {
   id: string
   amount: number
+  /** Optional formula text. Undefined = leave formula unchanged; null = clear it. */
+  formula?: string | null
 }
 
 /** Atomic (non-compound) undo entry — the primitives that compound entries wrap. */

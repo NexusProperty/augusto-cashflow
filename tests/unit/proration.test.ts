@@ -35,6 +35,7 @@ function makeLine(overrides: MakeLineOverrides = {}): ForecastLine {
     sourceRuleId: overrides.sourceRuleId ?? null,
     sourcePipelineProjectId: overrides.sourcePipelineProjectId ?? null,
     lineStatus: overrides.lineStatus ?? 'confirmed',
+    formula: null,
   }
 }
 

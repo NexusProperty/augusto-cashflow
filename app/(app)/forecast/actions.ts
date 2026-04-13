@@ -135,7 +135,7 @@ export async function deleteForecastLine(lineId: string) {
 }
 
 export async function updateLineAmounts(
-  payload: { updates: Array<{ id: string; amount: number }> },
+  payload: { updates: Array<{ id: string; amount: number; formula?: string | null }> },
 ): Promise<
   | { ok: true; count: number; skippedOutOfScope?: number }
   | { error: string; failedIds?: string[]; outOfScopeIds?: string[] }
@@ -162,18 +162,46 @@ export async function updateLineAmounts(
   }
 
   const supabase = await createClient()
-  // Atomic batched update via RPC — either every row updates or none do.
-  // Replaces the per-row loop which could leave partial state on failure.
-  const { error } = await supabase.rpc('update_forecast_line_amounts', {
-    p_updates: allowed as unknown as Json,
-  })
-  if (error) {
-    return {
-      error: 'Batch update failed',
-      failedIds: allowed.map((u) => u.id),
-      outOfScopeIds: outOfScope,
+
+  // Split into two groups:
+  //   pureAmounts — no formula field set (or formula undefined) → fast RPC batch
+  //   withFormula — formula field is present (even null to clear) → direct table update
+  const pureAmounts = allowed.filter((u) => u.formula === undefined)
+  const withFormula = allowed.filter((u) => u.formula !== undefined)
+
+  // Fast path: pure amount updates via atomic RPC
+  if (pureAmounts.length > 0) {
+    const { error } = await supabase.rpc('update_forecast_line_amounts', {
+      p_updates: pureAmounts as unknown as Json,
+    })
+    if (error) {
+      return {
+        error: 'Batch update failed',
+        failedIds: pureAmounts.map((u) => u.id),
+        outOfScopeIds: outOfScope,
+      }
     }
   }
+
+  // Formula path: direct table updates (formula-bearing rows are rare)
+  // Each update is individual; we collect failures and return the first error.
+  if (withFormula.length > 0) {
+    for (const u of withFormula) {
+      const { error } = await supabase
+        .from('forecast_lines')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- formula column added by migration 023; database.types.ts not yet regenerated
+        .update({ amount: u.amount, formula: u.formula ?? null, updated_at: new Date().toISOString() } as any)
+        .eq('id', u.id)
+      if (error) {
+        return {
+          error: 'Formula update failed',
+          failedIds: [u.id],
+          outOfScopeIds: outOfScope,
+        }
+      }
+    }
+  }
+
   revalidateForecast()
   return {
     ok: true,
