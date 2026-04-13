@@ -20,6 +20,7 @@ import {
   useForecastUndo,
   type SaveStatus,
 } from './use-forecast-undo'
+import { useCommitPipeline } from './use-commit-pipeline'
 import { computeAggregates, type Aggregates } from '@/lib/forecast/aggregates'
 import { computeWeekSummaries } from '@/lib/forecast/engine'
 import { prorateSubtotal } from '@/lib/forecast/proration'
@@ -1365,6 +1366,21 @@ export function ForecastGrid({
     onReplayBulkAdd: bulkAddForecastLines,
   })
 
+  // ── Shared commit pipeline (shift, duplicate, copy-forward, split) ────────────
+  const commitPlan = useCommitPipeline({
+    scenarioId,
+    setLocalLines,
+    snapshotRef,
+    applyLocal,
+    startTransition,
+    markSaved,
+    markError,
+    isReplayingRef,
+    undoStackRef,
+    onUpdateAmounts: updateLineAmounts,
+    onBulkAdd: bulkAddForecastLines,
+  })
+
   // Container keydown: Shift+arrow extends; Escape clears; Ctrl/Cmd+C/V copies/pastes.
   const handleGridKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -1981,202 +1997,23 @@ export function ForecastGrid({
    * When `autoConfirm` is false (button Apply path) the caller should already
    * have surfaced the collision warning. When `autoConfirm` is true (keyboard
    * path) collisions are accepted silently (Excel behaviour).
-   *
-   * Push is deferred until `bulkAddForecastLines` resolves so we have real IDs
-   * for the created sub-entries. During the round-trip the undo button is
-   * briefly unavailable for this operation — acceptable, same as `saveUpdates`.
    */
   const handleShift = useCallback(
-    async (n: number, { autoConfirm }: { autoConfirm: boolean }) => {
+    async (n: number, { autoConfirm: _autoConfirm }: { autoConfirm: boolean }) => {
       if (n === 0) return
-
       const plan = planShift(selectedCellKeys, n, flatRows, periods)
-
-      if (plan.updates.length === 0 && plan.creates.length === 0) return
-
-      if (!autoConfirm && plan.collisions > 0) {
-        // The popover already shows the collision count; apply was explicitly clicked.
-        // We proceed — caller guarantees user saw the warning.
-      }
-
-      // ── Optimistic local update ─────────────────────────────────────────
-
-      // 1. Apply all amount updates immediately (source clears + target overwrites).
-      const oldAmounts = plan.updates.map((u) => ({
-        id: u.id,
-        amount: snapshotRef.current.get(u.id) ?? 0,
-      }))
-      for (const u of plan.updates) snapshotRef.current.set(u.id, u.amount)
-      if (plan.updates.length > 0) applyLocal(plan.updates)
-
-      // 2. Insert optimistic temp lines for creates.
-      const tempLines: ForecastLine[] = plan.creates.map((c) => ({
-        id: c.tempId,
-        entityId: c.entityId,
-        categoryId: c.categoryId,
-        periodId: c.periodId,
-        amount: c.amount,
-        confidence: 100,
-        source: 'manual' as const,
-        counterparty: c.counterparty,
-        notes: c.notes,
-        sourceDocumentId: null,
-        sourceRuleId: null,
-        sourcePipelineProjectId: null,
-        lineStatus: c.lineStatus,
-        formula: null,
-      }))
-      if (tempLines.length > 0) {
-        setLocalLines((prev) => [...prev, ...tempLines])
-      }
-
-      // ── Server calls ────────────────────────────────────────────────────
-
-      startTransition(() => {
-        const doShift = async () => {
-          // Run both calls; updates can start immediately.
-          const [updateResult, createResult] = await Promise.all([
-            plan.updates.length > 0
-              ? updateLineAmounts({ updates: plan.updates })
-              : Promise.resolve({ ok: true as const, count: 0 }),
-            plan.creates.length > 0
-              ? bulkAddForecastLines(
-                  plan.creates.map((c) => ({
-                    entityId: c.entityId,
-                    categoryId: c.categoryId,
-                    periodId: c.periodId,
-                    amount: c.amount,
-                    counterparty: c.counterparty,
-                    notes: c.notes,
-                    lineStatus: c.lineStatus,
-                    source: 'manual',
-                    confidence: 100,
-                  })),
-                )
-              : Promise.resolve({ ok: true as const, data: [] as ForecastLine[] }),
-          ])
-
-          // ── Error handling ──────────────────────────────────────────────
-          if ('error' in updateResult) {
-            // Revert optimistic amount updates.
-            applyLocal(oldAmounts)
-            for (const o of oldAmounts) snapshotRef.current.set(o.id, o.amount)
-            // Revert optimistic temp lines.
-            if (tempLines.length > 0) {
-              const tempIds = new Set(tempLines.map((l) => l.id))
-              setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
-            }
-            markError(updateResult.error ?? 'Shift failed')
-            return
-          }
-
-          if ('error' in createResult) {
-            // Partial failure: amount updates went through, creates failed.
-            // Revert only the temp lines; keep the amount updates (they're
-            // already persisted). A full rollback of amounts would require
-            // another round-trip which adds complexity for a rare edge case.
-            if (tempLines.length > 0) {
-              const tempIds = new Set(tempLines.map((l) => l.id))
-              setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
-            }
-            // Push a partial undo entry so the user can Ctrl+Z the amount
-            // updates that did succeed, even though the creates never happened.
-            if (!isReplayingRef.current && plan.updates.length > 0) {
-              const partialAmountsSub: AtomicUndoEntry = {
-                kind: 'amounts',
-                forward: plan.updates,
-                inverse: oldAmounts,
-                label: 'shift amounts (partial)',
-                scenarioId,
-              }
-              undoStackRef.current.push({
-                kind: 'compound',
-                entries: [partialAmountsSub],
-                label: `Shift ${n > 0 ? '+' : ''}${n}w (partial)`,
-                scenarioId,
-              })
-            }
-            markError('Shift partially failed — amounts saved, new lines not created')
-            return
-          }
-
-          // ── Success ──────────────────────────────────────────────────
-          const createdLines = 'data' in createResult ? createResult.data : []
-
-          // Build a stable lookup by (entityId, categoryId, periodId) so that
-          // server re-ordering never assigns a realId to the wrong temp entry.
-          const responseByKey = new Map<string, ForecastLine>()
-          for (const row of createdLines) {
-            responseByKey.set(`${row.entityId}|${row.categoryId}|${row.periodId}`, row)
-          }
-
-          // Swap temp ids for real ids.
-          if (createdLines.length > 0) {
-            const realByTempId = new Map<string, ForecastLine>()
-            for (const c of plan.creates) {
-              const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
-              const real = responseByKey.get(key)
-              if (real) realByTempId.set(c.tempId, real)
-            }
-            setLocalLines((prev) =>
-              prev.map((l) => {
-                const real = realByTempId.get(l.id)
-                return real ?? l
-              }),
-            )
-            for (const real of createdLines) {
-              if (real) snapshotRef.current.set(real.id, real.amount)
-            }
-          }
-
-          // ── Build and push compound undo entry ─────────────────────
-          if (!isReplayingRef.current) {
-            // amounts sub-entry: forward = updates (source clears + target overwrites),
-            //                    inverse = old values (pre-shift).
-            const amountsSub: AtomicUndoEntry = {
-              kind: 'amounts',
-              forward: plan.updates,
-              inverse: oldAmounts,
-              label: 'shift amounts',
-              scenarioId,
-            }
-
-            // Per-line created sub-entries (one per new line, with real id now known).
-            const createdSubs: AtomicUndoEntry[] = plan.creates
-              .map((c) => {
-                const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
-                const real = responseByKey.get(key)
-                if (!real) return null
-                return {
-                  kind: 'created' as const,
-                  tempId: c.tempId,
-                  realId: real.id,
-                  label: '(inside shift)',
-                  scenarioId,
-                }
-              })
-              .filter((s): s is NonNullable<typeof s> => s !== null)
-
-            const subEntries: AtomicUndoEntry[] = [
-              amountsSub,
-              ...createdSubs,
-            ]
-
-            undoStackRef.current.push({
-              kind: 'compound',
-              entries: subEntries,
-              label: `Shift ${n > 0 ? '+' : ''}${n} week${Math.abs(n) === 1 ? '' : 's'} (${plan.updates.length + plan.creates.length} cell${plan.updates.length + plan.creates.length === 1 ? '' : 's'})`,
-              scenarioId,
-            })
-          }
-
-          markSaved()
-        }
-
-        void doShift()
-      })
+      // Collision warning is already surfaced by the popover; proceed regardless.
+      const sign = n > 0 ? '+' : ''
+      const totalCells = plan.updates.length + plan.creates.length
+      await commitPlan(
+        { updates: plan.updates, creates: plan.creates },
+        {
+          undoLabel: `Shift ${sign}${n} week${Math.abs(n) === 1 ? '' : 's'} (${totalCells} cell${totalCells === 1 ? '' : 's'})`,
+          partialLabel: `Shift ${sign}${n}w (partial)`,
+        },
+      )
     },
-    [selectedCellKeys, flatRows, periods, applyLocal, startTransition, markError, markSaved, scenarioId],
+    [selectedCellKeys, flatRows, periods, commitPlan],
   )
   // Keep the ref in sync so handleGridKeyDown (defined earlier) always calls
   // the latest closure of handleShift without needing it in its own deps array.
@@ -2194,169 +2031,11 @@ export function ForecastGrid({
    */
   const handleDuplicateRight = useCallback(async () => {
     const plan = planShift(selectedCellKeys, 1, flatRows, periods, { clearSource: false })
-
-    if (plan.updates.length === 0 && plan.creates.length === 0) return
-
-    // ── Optimistic local update ───────────────────────────────────────────
-
-    // Apply target-overwrite updates (no source clears in this plan).
-    const oldAmounts = plan.updates.map((u) => ({
-      id: u.id,
-      amount: snapshotRef.current.get(u.id) ?? 0,
-    }))
-    for (const u of plan.updates) snapshotRef.current.set(u.id, u.amount)
-    if (plan.updates.length > 0) applyLocal(plan.updates)
-
-    // Insert optimistic temp lines for creates.
-    const tempLines: ForecastLine[] = plan.creates.map((c) => ({
-      id: c.tempId,
-      entityId: c.entityId,
-      categoryId: c.categoryId,
-      periodId: c.periodId,
-      amount: c.amount,
-      confidence: 100,
-      source: 'manual' as const,
-      counterparty: c.counterparty,
-      notes: c.notes,
-      sourceDocumentId: null,
-      sourceRuleId: null,
-      sourcePipelineProjectId: null,
-      lineStatus: c.lineStatus,
-      formula: null,
-    }))
-    if (tempLines.length > 0) {
-      setLocalLines((prev) => [...prev, ...tempLines])
-    }
-
-    // ── Server calls ──────────────────────────────────────────────────────
-
-    startTransition(() => {
-      const doDuplicate = async () => {
-        const [updateResult, createResult] = await Promise.all([
-          plan.updates.length > 0
-            ? updateLineAmounts({ updates: plan.updates })
-            : Promise.resolve({ ok: true as const, count: 0 }),
-          plan.creates.length > 0
-            ? bulkAddForecastLines(
-                plan.creates.map((c) => ({
-                  entityId: c.entityId,
-                  categoryId: c.categoryId,
-                  periodId: c.periodId,
-                  amount: c.amount,
-                  counterparty: c.counterparty,
-                  notes: c.notes,
-                  lineStatus: c.lineStatus,
-                  source: 'manual',
-                  confidence: 100,
-                })),
-              )
-            : Promise.resolve({ ok: true as const, data: [] as ForecastLine[] }),
-        ])
-
-        // ── Error handling ────────────────────────────────────────────────
-        if ('error' in updateResult) {
-          applyLocal(oldAmounts)
-          for (const o of oldAmounts) snapshotRef.current.set(o.id, o.amount)
-          if (tempLines.length > 0) {
-            const tempIds = new Set(tempLines.map((l) => l.id))
-            setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
-          }
-          markError(updateResult.error ?? 'Duplicate failed')
-          return
-        }
-
-        if ('error' in createResult) {
-          if (tempLines.length > 0) {
-            const tempIds = new Set(tempLines.map((l) => l.id))
-            setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
-          }
-          if (!isReplayingRef.current && plan.updates.length > 0) {
-            const partialAmountsSub: AtomicUndoEntry = {
-              kind: 'amounts',
-              forward: plan.updates,
-              inverse: oldAmounts,
-              label: 'duplicate amounts (partial)',
-              scenarioId,
-            }
-            undoStackRef.current.push({
-              kind: 'compound',
-              entries: [partialAmountsSub],
-              label: 'Duplicate to next week (partial)',
-              scenarioId,
-            })
-          }
-          markError('Duplicate partially failed — amounts saved, new lines not created')
-          return
-        }
-
-        // ── Success ───────────────────────────────────────────────────────
-        const createdLines = 'data' in createResult ? createResult.data : []
-
-        const responseByKey = new Map<string, ForecastLine>()
-        for (const row of createdLines) {
-          responseByKey.set(`${row.entityId}|${row.categoryId}|${row.periodId}`, row)
-        }
-
-        // Swap temp ids for real ids.
-        if (createdLines.length > 0) {
-          const realByTempId = new Map<string, ForecastLine>()
-          for (const c of plan.creates) {
-            const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
-            const real = responseByKey.get(key)
-            if (real) realByTempId.set(c.tempId, real)
-          }
-          setLocalLines((prev) =>
-            prev.map((l) => {
-              const real = realByTempId.get(l.id)
-              return real ?? l
-            }),
-          )
-          for (const real of createdLines) {
-            if (real) snapshotRef.current.set(real.id, real.amount)
-          }
-        }
-
-        // ── Build and push compound undo entry ────────────────────────────
-        if (!isReplayingRef.current) {
-          const amountsSub: AtomicUndoEntry = {
-            kind: 'amounts',
-            forward: plan.updates,
-            inverse: oldAmounts,
-            label: 'duplicate amounts',
-            scenarioId,
-          }
-
-          const createdSubs: AtomicUndoEntry[] = plan.creates
-            .map((c) => {
-              const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
-              const real = responseByKey.get(key)
-              if (!real) return null
-              return {
-                kind: 'created' as const,
-                tempId: c.tempId,
-                realId: real.id,
-                label: '(inside duplicate)',
-                scenarioId,
-              }
-            })
-            .filter((s): s is NonNullable<typeof s> => s !== null)
-
-          const subEntries: AtomicUndoEntry[] = [amountsSub, ...createdSubs]
-
-          undoStackRef.current.push({
-            kind: 'compound',
-            entries: subEntries,
-            label: 'Duplicate to next week',
-            scenarioId,
-          })
-        }
-
-        markSaved()
-      }
-
-      void doDuplicate()
-    })
-  }, [selectedCellKeys, flatRows, periods, applyLocal, startTransition, markError, markSaved, scenarioId])
+    await commitPlan(
+      { updates: plan.updates, creates: plan.creates },
+      { undoLabel: 'Duplicate to next week', partialLabel: 'Duplicate to next week (partial)' },
+    )
+  }, [selectedCellKeys, flatRows, periods, commitPlan])
 
   // Keep the ref in sync so handleGridKeyDown (defined earlier) always calls
   // the latest closure of handleDuplicateRight.
@@ -2398,13 +2077,7 @@ export function ForecastGrid({
 
   /**
    * Merge N planShift results (offsets 1..N, clearSource=false) into one plan,
-   * then commit as a single compound undo entry.
-   *
-   * NOTE: This duplicates the commit pipeline from handleShift / handleDuplicateRight
-   * / commitSplit. Extraction into a shared helper was considered but deferred:
-   * the helper would need 8+ deps threaded through its signature, and the risk of
-   * regressing the existing undo/redo paths outweighed the DRY benefit for this
-   * 4th caller. Document the debt here if a 5th caller appears.
+   * then commit as a single compound undo entry via useCommitPipeline.
    */
   const runCopyForward = useCallback(
     async (n: number) => {
@@ -2413,8 +2086,6 @@ export function ForecastGrid({
       // ── Merge N planShift results ──────────────────────────────────────────
       const updatesById = new Map<string, ShiftAmountUpdate>()
       const createsByKey = new Map<string, ShiftCreate>()
-      let totalCollisions = 0
-      let totalSkipped = 0
 
       for (let i = 1; i <= n; i++) {
         const p = planShift(selectedCellKeys, i, flatRows, periods, { clearSource: false })
@@ -2422,172 +2093,21 @@ export function ForecastGrid({
         for (const c of p.creates) {
           createsByKey.set(`${c.entityId}|${c.categoryId}|${c.periodId}`, c)
         }
-        totalCollisions += p.collisions
-        totalSkipped += p.skipped
       }
 
       const mergedUpdates = Array.from(updatesById.values())
       const mergedCreates = Array.from(createsByKey.values())
+      const totalCells = mergedUpdates.length + mergedCreates.length
 
-      if (mergedUpdates.length === 0 && mergedCreates.length === 0) return
-
-      // ── Optimistic local update ────────────────────────────────────────────
-
-      const oldAmounts = mergedUpdates.map((u) => ({
-        id: u.id,
-        amount: snapshotRef.current.get(u.id) ?? 0,
-      }))
-      for (const u of mergedUpdates) snapshotRef.current.set(u.id, u.amount)
-      if (mergedUpdates.length > 0) applyLocal(mergedUpdates)
-
-      const tempLines: ForecastLine[] = mergedCreates.map((c) => ({
-        id: c.tempId,
-        entityId: c.entityId,
-        categoryId: c.categoryId,
-        periodId: c.periodId,
-        amount: c.amount,
-        confidence: 100,
-        source: 'manual' as const,
-        counterparty: c.counterparty,
-        notes: c.notes,
-        sourceDocumentId: null,
-        sourceRuleId: null,
-        sourcePipelineProjectId: null,
-        lineStatus: c.lineStatus,
-        formula: null,
-      }))
-      if (tempLines.length > 0) {
-        setLocalLines((prev) => [...prev, ...tempLines])
-      }
-
-      // ── Server calls ──────────────────────────────────────────────────────
-
-      startTransition(() => {
-        const doCopyForward = async () => {
-          const [updateResult, createResult] = await Promise.all([
-            mergedUpdates.length > 0
-              ? updateLineAmounts({ updates: mergedUpdates })
-              : Promise.resolve({ ok: true as const, count: 0 }),
-            mergedCreates.length > 0
-              ? bulkAddForecastLines(
-                  mergedCreates.map((c) => ({
-                    entityId: c.entityId,
-                    categoryId: c.categoryId,
-                    periodId: c.periodId,
-                    amount: c.amount,
-                    counterparty: c.counterparty,
-                    notes: c.notes,
-                    lineStatus: c.lineStatus,
-                    source: 'manual',
-                    confidence: 100,
-                  })),
-                )
-              : Promise.resolve({ ok: true as const, data: [] as ForecastLine[] }),
-          ])
-
-          // ── Error handling ────────────────────────────────────────────────
-          if ('error' in updateResult) {
-            applyLocal(oldAmounts)
-            for (const o of oldAmounts) snapshotRef.current.set(o.id, o.amount)
-            if (tempLines.length > 0) {
-              const tempIds = new Set(tempLines.map((l) => l.id))
-              setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
-            }
-            markError(updateResult.error ?? 'Copy forward failed')
-            return
-          }
-
-          if ('error' in createResult) {
-            if (tempLines.length > 0) {
-              const tempIds = new Set(tempLines.map((l) => l.id))
-              setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
-            }
-            if (!isReplayingRef.current && mergedUpdates.length > 0) {
-              const partialAmountsSub: AtomicUndoEntry = {
-                kind: 'amounts',
-                forward: mergedUpdates,
-                inverse: oldAmounts,
-                label: 'copy forward amounts (partial)',
-                scenarioId,
-              }
-              undoStackRef.current.push({
-                kind: 'compound',
-                entries: [partialAmountsSub],
-                label: `Copy forward ${n} week${n === 1 ? '' : 's'} (partial)`,
-                scenarioId,
-              })
-            }
-            markError('Copy forward partially failed — amounts saved, new lines not created')
-            return
-          }
-
-          // ── Success ───────────────────────────────────────────────────────
-          const createdLines = 'data' in createResult ? createResult.data : []
-
-          const responseByKey = new Map<string, ForecastLine>()
-          for (const row of createdLines) {
-            responseByKey.set(`${row.entityId}|${row.categoryId}|${row.periodId}`, row)
-          }
-
-          if (createdLines.length > 0) {
-            const realByTempId = new Map<string, ForecastLine>()
-            for (const c of mergedCreates) {
-              const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
-              const real = responseByKey.get(key)
-              if (real) realByTempId.set(c.tempId, real)
-            }
-            setLocalLines((prev) =>
-              prev.map((l) => {
-                const real = realByTempId.get(l.id)
-                return real ?? l
-              }),
-            )
-            for (const real of createdLines) {
-              if (real) snapshotRef.current.set(real.id, real.amount)
-            }
-          }
-
-          // ── Build and push compound undo entry ────────────────────────────
-          if (!isReplayingRef.current) {
-            const amountsSub: AtomicUndoEntry = {
-              kind: 'amounts',
-              forward: mergedUpdates,
-              inverse: oldAmounts,
-              label: 'copy forward amounts',
-              scenarioId,
-            }
-
-            const createdSubs: AtomicUndoEntry[] = mergedCreates
-              .map((c) => {
-                const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
-                const real = responseByKey.get(key)
-                if (!real) return null
-                return {
-                  kind: 'created' as const,
-                  tempId: c.tempId,
-                  realId: real.id,
-                  label: '(inside copy forward)',
-                  scenarioId,
-                }
-              })
-              .filter((s): s is NonNullable<typeof s> => s !== null)
-
-            const totalCells = mergedUpdates.length + mergedCreates.length
-            undoStackRef.current.push({
-              kind: 'compound',
-              entries: [amountsSub, ...createdSubs],
-              label: `Copy forward ${n} week${n === 1 ? '' : 's'} (${totalCells} cell${totalCells === 1 ? '' : 's'})`,
-              scenarioId,
-            })
-          }
-
-          markSaved()
-        }
-
-        void doCopyForward()
-      })
+      await commitPlan(
+        { updates: mergedUpdates, creates: mergedCreates },
+        {
+          undoLabel: `Copy forward ${n} week${n === 1 ? '' : 's'} (${totalCells} cell${totalCells === 1 ? '' : 's'})`,
+          partialLabel: `Copy forward ${n} week${n === 1 ? '' : 's'} (partial)`,
+        },
+      )
     },
-    [selectedCellKeys, flatRows, periods, applyLocal, startTransition, markError, markSaved, scenarioId],
+    [selectedCellKeys, flatRows, periods, commitPlan],
   )
 
   // ── Split cell modal state ────────────────────────────────────────────────
@@ -2630,163 +2150,16 @@ export function ForecastGrid({
 
   const commitSplit = useCallback(
     async (plan: ReturnType<typeof planSplitCell>) => {
-      if (plan.updates.length === 0 && plan.creates.length === 0) return
-
-      // ── Optimistic local update ─────────────────────────────────────────
-      const oldAmounts = plan.updates.map((u) => ({
-        id: u.id,
-        amount: snapshotRef.current.get(u.id) ?? 0,
-      }))
-      for (const u of plan.updates) snapshotRef.current.set(u.id, u.amount)
-      if (plan.updates.length > 0) applyLocal(plan.updates)
-
-      const tempLines: ForecastLine[] = plan.creates.map((c) => ({
-        id: c.tempId,
-        entityId: c.entityId,
-        categoryId: c.categoryId,
-        periodId: c.periodId,
-        amount: c.amount,
-        confidence: 100,
-        source: 'manual' as const,
-        counterparty: c.counterparty,
-        notes: c.notes,
-        sourceDocumentId: null,
-        sourceRuleId: null,
-        sourcePipelineProjectId: null,
-        lineStatus: c.lineStatus,
-        formula: null,
-      }))
-      if (tempLines.length > 0) {
-        setLocalLines((prev) => [...prev, ...tempLines])
-      }
-
-      // ── Server calls ────────────────────────────────────────────────────
-      startTransition(() => {
-        const doSplit = async () => {
-          const [updateResult, createResult] = await Promise.all([
-            plan.updates.length > 0
-              ? updateLineAmounts({ updates: plan.updates })
-              : Promise.resolve({ ok: true as const, count: 0 }),
-            plan.creates.length > 0
-              ? bulkAddForecastLines(
-                  plan.creates.map((c) => ({
-                    entityId: c.entityId,
-                    categoryId: c.categoryId,
-                    periodId: c.periodId,
-                    amount: c.amount,
-                    counterparty: c.counterparty,
-                    notes: c.notes,
-                    lineStatus: c.lineStatus,
-                    source: 'manual',
-                    confidence: 100,
-                  })),
-                )
-              : Promise.resolve({ ok: true as const, data: [] as ForecastLine[] }),
-          ])
-
-          // ── Error handling ──────────────────────────────────────────────
-          if ('error' in updateResult) {
-            applyLocal(oldAmounts)
-            for (const o of oldAmounts) snapshotRef.current.set(o.id, o.amount)
-            if (tempLines.length > 0) {
-              const tempIds = new Set(tempLines.map((l) => l.id))
-              setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
-            }
-            markError(updateResult.error ?? 'Split failed')
-            return
-          }
-
-          if ('error' in createResult) {
-            if (tempLines.length > 0) {
-              const tempIds = new Set(tempLines.map((l) => l.id))
-              setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
-            }
-            if (!isReplayingRef.current && plan.updates.length > 0) {
-              const partialAmountsSub: AtomicUndoEntry = {
-                kind: 'amounts',
-                forward: plan.updates,
-                inverse: oldAmounts,
-                label: 'split amounts (partial)',
-                scenarioId,
-              }
-              undoStackRef.current.push({
-                kind: 'compound',
-                entries: [partialAmountsSub],
-                label: 'Split cell (partial)',
-                scenarioId,
-              })
-            }
-            markError('Split partially failed — amounts saved, new lines not created')
-            return
-          }
-
-          // ── Success ──────────────────────────────────────────────────
-          const createdLines = 'data' in createResult ? createResult.data : []
-
-          const responseByKey = new Map<string, ForecastLine>()
-          for (const row of createdLines) {
-            responseByKey.set(`${row.entityId}|${row.categoryId}|${row.periodId}`, row)
-          }
-
-          if (createdLines.length > 0) {
-            const realByTempId = new Map<string, ForecastLine>()
-            for (const c of plan.creates) {
-              const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
-              const real = responseByKey.get(key)
-              if (real) realByTempId.set(c.tempId, real)
-            }
-            setLocalLines((prev) =>
-              prev.map((l) => {
-                const real = realByTempId.get(l.id)
-                return real ?? l
-              }),
-            )
-            for (const real of createdLines) {
-              if (real) snapshotRef.current.set(real.id, real.amount)
-            }
-          }
-
-          // ── Build and push compound undo entry ─────────────────────
-          if (!isReplayingRef.current) {
-            const amountsSub: AtomicUndoEntry = {
-              kind: 'amounts',
-              forward: plan.updates,
-              inverse: oldAmounts,
-              label: 'split amounts',
-              scenarioId,
-            }
-
-            const createdSubs: AtomicUndoEntry[] = plan.creates
-              .map((c) => {
-                const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
-                const real = responseByKey.get(key)
-                if (!real) return null
-                return {
-                  kind: 'created' as const,
-                  tempId: c.tempId,
-                  realId: real.id,
-                  label: '(inside split)',
-                  scenarioId,
-                }
-              })
-              .filter((s): s is NonNullable<typeof s> => s !== null)
-
-            const totalCells = plan.updates.length + plan.creates.length
-            undoStackRef.current.push({
-              kind: 'compound',
-              entries: [amountsSub, ...createdSubs],
-              label: `Split cell across weeks (${totalCells} cell${totalCells === 1 ? '' : 's'})`,
-              scenarioId,
-            })
-          }
-
-          markSaved()
-        }
-
-        void doSplit()
-      })
+      const totalCells = plan.updates.length + plan.creates.length
+      await commitPlan(
+        { updates: plan.updates, creates: plan.creates },
+        {
+          undoLabel: `Split cell across weeks (${totalCells} cell${totalCells === 1 ? '' : 's'})`,
+          partialLabel: 'Split cell (partial)',
+        },
+      )
     },
-    [applyLocal, startTransition, markError, markSaved, scenarioId],
+    [commitPlan],
   )
 
   // ── Hidden rows count (footer) ────────────────────────────────────────────
