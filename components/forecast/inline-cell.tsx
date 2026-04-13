@@ -76,40 +76,42 @@ interface InlineCellProps {
   className?: string
   onMoveFocus?: (direction: Direction) => void
   onClear?: () => void
-  isFocused?: boolean
   /** Row index in `flatRows` — emitted as `data-row` for selection tracking. */
   rowIdx?: number
   /** Col index in `periods` — emitted as `data-col` for selection tracking. */
   colIdx?: number
-  /** True when this cell is part of the current multi-cell selection range. */
-  inSelectionRange?: boolean
-  /** True when this cell is the selection anchor (first clicked / origin). */
-  isAnchor?: boolean
-  /** True when this cell sits in the fill-handle preview area but NOT in the source selection. */
-  isFillPreview?: boolean
-  /** True when this cell is the bottom-right of the selection (renders the handle). */
-  showFillHandle?: boolean
-  /** Called on mousedown of the fill handle to start a fill-drag. */
-  onFillStart?: (e: React.MouseEvent) => void
-  /** Called on double-click of the fill handle to auto-fill downward. */
-  onFillDoubleClick?: (e: React.MouseEvent) => void
-  /** True when this cell is the current Find match — renders a yellow ring flash. */
-  isFindHighlight?: boolean
   /** Optional note from forecast_lines.notes — renders an amber dot indicator. */
   note?: string | null
-  /**
-   * When set, the cell becomes position:sticky with this left offset (px).
-   * Used for the freeze-columns feature. Hardcoded: 280px label + 100px per week col.
-   */
-  stickyLeft?: number
-  /** Right-click handler — used by forecast-grid to open the split-cell modal. */
-  onContextMenu?: (e: React.MouseEvent) => void
   /**
    * Optional formula stored on this cell's forecast line (e.g. `=SUM(W1:W4)`).
    * When set, an `=` indicator is rendered at the top-left of the cell, and
    * entering edit mode pre-populates the editor with the formula text.
    */
   formula?: string | null
+  /** Right-click handler — used by forecast-grid to open the split-cell modal. */
+  onContextMenu?: (e: React.MouseEvent) => void
+
+  /** Selection-related visual state. Packaged so the type surface scales. */
+  selection?: {
+    isFocused?: boolean
+    inSelectionRange?: boolean
+    isAnchor?: boolean
+    isFillPreview?: boolean
+    isFindHighlight?: boolean
+  }
+
+  /** Fill-handle props. Packaged so the handle can be toggled/wired atomically. */
+  fill?: {
+    showFillHandle?: boolean
+    onFillStart?: (e: React.MouseEvent) => void
+    onFillDoubleClick?: (e: React.MouseEvent) => void
+  }
+
+  /**
+   * When set, the cell becomes position:sticky with this left offset (px).
+   * Used for the freeze-columns feature. Hardcoded: 280px label + 100px per week col.
+   */
+  stickyLeft?: number
 }
 
 function FillHandle({
@@ -146,21 +148,23 @@ export const InlineCell = memo(function InlineCell({
   className,
   onMoveFocus,
   onClear,
-  isFocused,
   rowIdx,
   colIdx,
-  inSelectionRange,
-  isAnchor,
-  isFillPreview,
-  showFillHandle,
-  onFillStart,
-  onFillDoubleClick,
-  isFindHighlight,
   note,
-  stickyLeft,
-  onContextMenu,
   formula,
+  onContextMenu,
+  selection,
+  fill,
+  stickyLeft,
 }: InlineCellProps) {
+  const isFocused = selection?.isFocused
+  const inSelectionRange = selection?.inSelectionRange
+  const isAnchor = selection?.isAnchor
+  const isFillPreview = selection?.isFillPreview
+  const isFindHighlight = selection?.isFindHighlight
+  const showFillHandle = fill?.showFillHandle
+  const onFillStart = fill?.onFillStart
+  const onFillDoubleClick = fill?.onFillDoubleClick
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [inputError, setInputError] = useState<string | null>(null)

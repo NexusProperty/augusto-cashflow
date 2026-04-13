@@ -263,7 +263,7 @@ export const SectionBlock = memo(function SectionBlock({
                         isNegative={total < 0}
                         onSave={() => {}}
                         onMoveFocus={(dir) => onMoveFocus(flatIdx, colIdx, dir)}
-                        isFocused={isFocusedCell}
+                        selection={{ isFocused: isFocusedCell }}
                         rowIdx={flatIdx}
                         colIdx={colIdx}
                         stickyLeft={stickyLeft}
@@ -281,7 +281,7 @@ export const SectionBlock = memo(function SectionBlock({
                       isNegative={total < 0}
                       onSave={(newTotal) => onSubtotalSave(subCategoryIds, p.id, newTotal)}
                       onMoveFocus={(dir) => onMoveFocus(flatIdx, colIdx, dir)}
-                      isFocused={isFocusedCell}
+                      selection={{ isFocused: isFocusedCell }}
                       rowIdx={flatIdx}
                       colIdx={colIdx}
                       stickyLeft={stickyLeft}
@@ -503,16 +503,20 @@ export const SectionBlock = memo(function SectionBlock({
                           onMoveFocus(flatIdx, colIdx, dir)
                         }
                       }}
-                      isFocused={isFocusedCell}
+                      selection={{
+                        isFocused: isFocusedCell,
+                        inSelectionRange: inAnySelection,
+                        isAnchor,
+                        isFillPreview: inFillPreview,
+                        isFindHighlight,
+                      }}
+                      fill={{
+                        showFillHandle: showHandle,
+                        onFillStart,
+                        onFillDoubleClick,
+                      }}
                       rowIdx={flatIdx}
                       colIdx={colIdx}
-                      inSelectionRange={inAnySelection}
-                      isAnchor={isAnchor}
-                      isFillPreview={inFillPreview}
-                      showFillHandle={showHandle}
-                      onFillStart={onFillStart}
-                      onFillDoubleClick={onFillDoubleClick}
-                      isFindHighlight={isFindHighlight}
                       note={cellLine?.notes}
                       stickyLeft={stickyLeft}
                       onContextMenu={
