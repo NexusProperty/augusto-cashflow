@@ -34,6 +34,8 @@ import {
 import { toTSV, parseTSV, parseClipboardNumber } from '@/lib/forecast/clipboard'
 import { computeFillHandleRange, isInFillRange, detectPattern, materialisePattern } from '@/lib/forecast/fill-handle'
 import { planShift } from '@/lib/forecast/shift-by-weeks'
+import { buildMatchList, nextMatchIndex, prevMatchIndex, type FindMatch } from '@/lib/forecast/find'
+import { FindBar } from './find-bar'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
 import type { ForecastLine, LineStatus, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
@@ -394,6 +396,17 @@ export function ForecastGrid({
 
   const [hideEmpty, setHideEmpty] = useState(true)
 
+  // ── Find (Ctrl+F) ─────────────────────────────────────────────────────────
+  const [findOpen, setFindOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
+  const [onlyMatching, setOnlyMatching] = useState(false)
+  const [matchCursor, setMatchCursor] = useState<number | null>(null)
+  const [highlightCell, setHighlightCell] = useState<{ row: number; col: number } | null>(null)
+  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current)
+  }, [])
+
   const toggleSection = useCallback((id: string) => {
     setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }))
   }, [])
@@ -403,6 +416,21 @@ export function ForecastGrid({
   const flatRows = useMemo(
     () => buildFlatRows(sections, categories, localLines, collapsed),
     [sections, categories, localLines, collapsed],
+  )
+
+  // ── Find derived state ────────────────────────────────────────────────────
+  const matches = useMemo(
+    () => (findQuery.trim() ? buildMatchList({ flatRows, periods, query: findQuery }) : []),
+    [findQuery, flatRows, periods],
+  )
+  // Reset cursor when query changes so navigation restarts from the top.
+  useEffect(() => {
+    setMatchCursor(null)
+  }, [findQuery])
+
+  const filterRowSet = useMemo(
+    () => (onlyMatching && matches.length > 0 ? new Set(matches.map((m) => m.row)) : null),
+    [onlyMatching, matches],
   )
 
   // Selection state in (flatRowIndex, periodIndex) space. Single-cell selection
@@ -437,6 +465,75 @@ export function ForecastGrid({
     },
     [flatRows.length, periods.length, isFocusableRow],
   )
+
+  // ── Find: navigate to a match, expanding collapsed sections if needed ─────
+
+  const navigateToMatch = useCallback(
+    (match: FindMatch) => {
+      const targetRow = match.row
+      const targetCol = match.col ?? 0
+
+      // Auto-expand collapsed section containing this row.
+      const fr = flatRows[targetRow]
+      if (fr) {
+        const { sectionId } = fr
+        if (collapsed[sectionId]) {
+          setCollapsed((prev) => ({ ...prev, [sectionId]: false }))
+        }
+      }
+
+      // Move selection to the matched cell.
+      setSelection(collapseTo({ row: targetRow, col: targetCol }))
+
+      // Highlight ring: set immediately, clear after 500 ms.
+      if (match.col !== null) {
+        setHighlightCell({ row: targetRow, col: targetCol })
+        if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current)
+        highlightTimeoutRef.current = setTimeout(() => setHighlightCell(null), 500)
+      }
+
+      // Scroll the matched cell into view.
+      // Double-rAF: first frame lets React commit the state (e.g. section expand),
+      // second frame ensures the newly rendered rows are in the DOM before querying.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const container = gridRootRef.current ?? document
+          const el = container.querySelector(
+            `[data-row="${targetRow}"][data-col="${targetCol}"]`,
+          ) as HTMLElement | null
+          el?.scrollIntoView({ block: 'nearest' })
+        })
+      })
+    },
+    [flatRows, collapsed],
+  )
+
+  const handleFindNext = useCallback(() => {
+    if (matches.length === 0) return
+    const nextCursor = nextMatchIndex(matchCursor, matches.length)
+    setMatchCursor(nextCursor)
+    const match = matches[nextCursor]
+    if (match) navigateToMatch(match)
+  }, [matches, matchCursor, navigateToMatch])
+
+  const handleFindPrev = useCallback(() => {
+    if (matches.length === 0) return
+    const prevCursor = prevMatchIndex(matchCursor, matches.length)
+    setMatchCursor(prevCursor)
+    const match = matches[prevCursor]
+    if (match) navigateToMatch(match)
+  }, [matches, matchCursor, navigateToMatch])
+
+  const handleFindClose = useCallback(() => {
+    if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current)
+    setFindOpen(false)
+    setFindQuery('')
+    setOnlyMatching(false)
+    setMatchCursor(null)
+    setHighlightCell(null)
+    // Restore focus to the grid after close so keyboard nav continues.
+    gridRootRef.current?.focus()
+  }, [])
 
   // ── Multi-cell selection: mouse drag + Shift+arrow extend ────────────────
   const isDraggingRef = useRef(false)
@@ -1087,6 +1184,15 @@ export function ForecastGrid({
   // Container keydown: Shift+arrow extends; Escape clears; Ctrl/Cmd+C/V copies/pastes.
   const handleGridKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // ── Open Find bar: Ctrl/Cmd+F ─────────────────────────────────────────
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+        const active = document.activeElement
+        if (active && active.tagName === 'INPUT') return
+        e.preventDefault()
+        setFindOpen(true)
+        return
+      }
+
       if (e.key === 'Escape') {
         if (selection || extraSelected.size > 0) {
           setSelection(null)
@@ -1611,7 +1717,22 @@ export function ForecastGrid({
   const anchor = selection?.anchor ?? null
 
   return (
-    <div ref={gridRootRef} onMouseDown={handleGridMouseDown} onKeyDown={handleGridKeyDown}>
+    <div ref={gridRootRef} className="relative" tabIndex={-1} onMouseDown={handleGridMouseDown} onKeyDown={handleGridKeyDown}>
+      {/* Find bar */}
+      {findOpen && (
+        <FindBar
+          query={findQuery}
+          total={matches.length}
+          currentIndex={matchCursor}
+          onlyMatching={onlyMatching}
+          onQueryChange={setFindQuery}
+          onNext={handleFindNext}
+          onPrev={handleFindPrev}
+          onClose={handleFindClose}
+          onOnlyMatchingChange={setOnlyMatching}
+        />
+      )}
+
       {/* Controls bar */}
       <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-500">
@@ -1769,6 +1890,8 @@ export function ForecastGrid({
                 onFillStart={handleFillStart}
                 onFillDoubleClick={handleFillDoubleClick}
                 onCellCreate={handleEmptyCellCreate}
+                filterRowSet={filterRowSet}
+                highlightCell={highlightCell}
               />
             ))}
 
@@ -2072,6 +2195,8 @@ const SectionBlock = memo(function SectionBlock({
   fillPreviewRange,
   onFillStart,
   onFillDoubleClick,
+  filterRowSet,
+  highlightCell,
 }: {
   section: Category
   categories: Category[]
@@ -2095,6 +2220,10 @@ const SectionBlock = memo(function SectionBlock({
   fillPreviewRange: { rowStart: number; rowEnd: number; colStart: number; colEnd: number } | null
   onFillStart: () => void
   onFillDoubleClick: () => void
+  /** When "only matching rows" is active, a Set of flat-row indexes to show. */
+  filterRowSet?: Set<number> | null
+  /** Flat-row index + col of the currently highlighted find match (500 ms flash). */
+  highlightCell?: { row: number; col: number } | null
 }) {
   const style = getSectionStyle(section.flowDirection)
 
@@ -2263,14 +2392,17 @@ const SectionBlock = memo(function SectionBlock({
           })}
 
           {itemRows.map(({ key, label, lineMap, isPipeline, line }) => {
-            if (hideEmpty && emptyKeys.has(key)) return null
+            const flatIdx = flatIndexByKey.get(`item::${key}`) ?? -1
+            // "Only matching rows" filter: skip rows not in the match set.
+            // Matched rows always show even when hideEmpty is active.
+            const isMatchedRow = filterRowSet != null && flatIdx >= 0 && filterRowSet.has(flatIdx)
+            if (filterRowSet != null && !isMatchedRow) return null
+            if (!isMatchedRow && hideEmpty && emptyKeys.has(key)) return null
             const isOverridden =
               overriddenSet && Array.from(lineMap.values()).some((l) => overriddenSet.has(l.id))
             const overrideTitle = isOverridden
               ? `Overridden in ${overrideScenarioLabel ?? 'active scenario'}`
               : undefined
-
-            const flatIdx = flatIndexByKey.get(`item::${key}`) ?? -1
 
             if (isPipeline) {
               // Read-only row — delegate to ForecastRow
@@ -2355,6 +2487,11 @@ const SectionBlock = memo(function SectionBlock({
                     fillPreviewRange !== null &&
                     isInFillRange(fillPreviewRange, flatIdx, colIdx) &&
                     !inRange
+                  const isFindHighlight =
+                    highlightCell !== null &&
+                    highlightCell !== undefined &&
+                    highlightCell.row === flatIdx &&
+                    highlightCell.col === colIdx
                   return (
                     <InlineCell
                       key={p.id}
@@ -2390,6 +2527,7 @@ const SectionBlock = memo(function SectionBlock({
                       showFillHandle={showHandle}
                       onFillStart={onFillStart}
                       onFillDoubleClick={onFillDoubleClick}
+                      isFindHighlight={isFindHighlight}
                     />
                   )
                 })}

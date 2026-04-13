@@ -68,6 +68,8 @@ interface InlineCellProps {
   onFillStart?: (e: React.MouseEvent) => void
   /** Called on double-click of the fill handle to auto-fill downward. */
   onFillDoubleClick?: (e: React.MouseEvent) => void
+  /** True when this cell is the current Find match — renders a yellow ring flash. */
+  isFindHighlight?: boolean
 }
 
 function FillHandle({
@@ -113,6 +115,7 @@ export const InlineCell = memo(function InlineCell({
   showFillHandle,
   onFillStart,
   onFillDoubleClick,
+  isFindHighlight,
 }: InlineCellProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -161,6 +164,7 @@ export const InlineCell = memo(function InlineCell({
           inSelectionRange && !isFocused && (isAnchor ? 'bg-indigo-100' : 'bg-indigo-50'),
           isFocused && 'ring-2 ring-indigo-500',
           isFillPreview && 'outline outline-2 outline-dashed outline-indigo-400 -outline-offset-2',
+          isFindHighlight && 'ring-2 ring-yellow-400',
           className,
         )}
         onKeyDown={(e) => {
@@ -247,6 +251,7 @@ export const InlineCell = memo(function InlineCell({
         inSelectionRange && !isFocused && (isAnchor ? 'bg-indigo-100' : 'bg-indigo-50'),
         isFocused && 'ring-2 ring-indigo-500',
         isFillPreview && 'outline outline-2 outline-dashed outline-indigo-400 -outline-offset-2',
+        isFindHighlight && 'ring-2 ring-yellow-400',
         className,
       )}
       onClick={(e) => {
