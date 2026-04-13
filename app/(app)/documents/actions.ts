@@ -442,3 +442,58 @@ export async function bulkApplyAndConfirm(
   revalidatePath('/forecast/detail')
   return { ok: true, confirmedCount, stillMissing }
 }
+
+/**
+ * Delete a document: removes the storage file, pending extractions, and the
+ * document row. Forecast lines already confirmed from this document are
+ * preserved — we just null out their `source_document_id` so the link is
+ * broken but the user's confirmed data survives.
+ */
+export async function deleteDocument(documentId: string) {
+  await requireAuth()
+  const parsed = z.string().uuid().safeParse(documentId)
+  if (!parsed.success) return { error: 'Invalid document id' }
+
+  const admin = createAdminClient()
+
+  // Fetch the document to get its storage path before we delete the row.
+  const { data: doc, error: fetchErr } = await admin
+    .from('documents')
+    .select('storage_path')
+    .eq('id', parsed.data)
+    .single()
+
+  if (fetchErr || !doc) return { error: 'Document not found' }
+
+  // Preserve confirmed forecast lines by clearing their FK reference first.
+  await admin
+    .from('forecast_lines')
+    .update({ source_document_id: null })
+    .eq('source_document_id', parsed.data)
+
+  // Delete pending (non-confirmed) extractions explicitly. Confirmed
+  // extractions that point to a still-live forecast_line also get dropped —
+  // the forecast_line itself survives via the FK null above.
+  await admin
+    .from('document_extractions')
+    .delete()
+    .eq('document_id', parsed.data)
+
+  // Remove the stored file. Failure here is non-fatal — we continue to
+  // delete the row so the UI doesn't keep showing a ghost record.
+  if (doc.storage_path) {
+    await admin.storage.from('documents').remove([doc.storage_path])
+  }
+
+  const { error: deleteErr } = await admin
+    .from('documents')
+    .delete()
+    .eq('id', parsed.data)
+
+  if (deleteErr) return { error: 'Failed to delete document' }
+
+  revalidatePath('/documents')
+  revalidatePath('/forecast')
+  revalidatePath('/forecast/detail')
+  return { ok: true }
+}
