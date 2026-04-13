@@ -428,18 +428,34 @@ export function ForecastGrid({
       })
       setFillPreviewRange(null)
 
-      if (skippedPipeline + skippedNoLine + skippedNonItem > 0) {
+      if (
+        process.env.NODE_ENV === 'development' &&
+        skippedPipeline + skippedNoLine + skippedNonItem > 0
+      ) {
         console.log(
           `Fill: wrote ${updates.length} cells (skipped ${skippedPipeline} pipeline, ${skippedNoLine} no-line, ${skippedNonItem} non-item)`,
         )
       }
     }
 
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (!isFillDraggingRef.current) return
+      // Cancel the in-progress fill: reset all drag state without committing
+      // any updates. Prevents stale source/preview from firing on next mouseup.
+      isFillDraggingRef.current = false
+      fillSourceRef.current = null
+      setFillPreviewRange(null)
+      e.preventDefault()
+    }
+
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
+    window.addEventListener('keydown', onKey)
     return () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('keydown', onKey)
     }
   }, [flatRows, periods, saveUpdates])
 
@@ -530,12 +546,14 @@ export function ForecastGrid({
 
       if (updates.length > 0) saveUpdates(updates)
 
-      console.log(
-        `Pasted ${updates.length} cells, skipped ${skippedPipeline} pipeline, skipped ${skippedNonNumeric} non-numeric` +
-          (skippedNoLine + skippedOutOfBounds + skippedNonItem > 0
-            ? ` (+${skippedNoLine} no-line, +${skippedOutOfBounds} out-of-bounds, +${skippedNonItem} non-item)`
-            : ''),
-      )
+      if (process.env.NODE_ENV === 'development') {
+        console.log(
+          `Pasted ${updates.length} cells, skipped ${skippedPipeline} pipeline, skipped ${skippedNonNumeric} non-numeric` +
+            (skippedNoLine + skippedOutOfBounds + skippedNonItem > 0
+              ? ` (+${skippedNoLine} no-line, +${skippedOutOfBounds} out-of-bounds, +${skippedNonItem} non-item)`
+              : ''),
+        )
+      }
     },
     [flatRows, periods, saveUpdates],
   )
@@ -558,9 +576,9 @@ export function ForecastGrid({
         const active = document.activeElement
         if (active && active.tagName === 'INPUT') return
 
-        // Need the Clipboard API.
+        // Need the Clipboard API. Surface to the user, not just the console.
         if (typeof navigator === 'undefined' || !navigator.clipboard) {
-          console.warn('Clipboard API not available')
+          markError('Clipboard not available — app must run over HTTPS or localhost')
           return
         }
 
@@ -571,12 +589,17 @@ export function ForecastGrid({
           e.preventDefault()
           navigator.clipboard.writeText(tsv).then(
             () => {
-              const rows = grid.length
-              const cols = grid[0]?.length ?? 0
-              console.log(`Copied ${rows}x${cols}`)
+              if (process.env.NODE_ENV === 'development') {
+                const rows = grid.length
+                const cols = grid[0]?.length ?? 0
+                console.log(`Copied ${rows}x${cols}`)
+              }
             },
             (err) => {
-              console.warn('Clipboard writeText rejected:', err)
+              markError('Copy failed — clipboard permission denied')
+              if (process.env.NODE_ENV === 'development') {
+                console.warn('Clipboard writeText rejected:', err)
+              }
             },
           )
           return
@@ -591,13 +614,16 @@ export function ForecastGrid({
           (text) => {
             const grid = parseTSV(text)
             if (grid.length === 0) {
-              console.log('Pasted 0 cells (empty clipboard)')
+              markError('Clipboard is empty')
               return
             }
             applyPasteGrid(grid, originRow, originCol)
           },
           (err) => {
-            console.warn('Clipboard readText rejected:', err)
+            markError('Paste failed — clipboard permission denied')
+            if (process.env.NODE_ENV === 'development') {
+              console.warn('Clipboard readText rejected:', err)
+            }
           },
         )
         return

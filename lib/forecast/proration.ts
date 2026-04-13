@@ -64,10 +64,22 @@ export function prorateSubtotal(
   const newAmounts = new Map<string, number>() // line id -> new amount
 
   if (currentTotal !== 0) {
-    // Proportional scaling
+    // Proportional scaling with running-sum correction. Naive Math.round on
+    // each line accumulates rounding error; for a 15-line section the
+    // subtotal can drift ±14 from newTotal. We correct by absorbing the
+    // drift into the last line so sum(rounded) === newTotal exactly.
     const scale = newTotal / currentTotal
-    for (const line of editableLines) {
-      newAmounts.set(line.id, Math.round(line.amount * scale))
+    const n = editableLines.length
+    let runningSum = 0
+    for (let k = 0; k < n; k++) {
+      const line = editableLines[k]!
+      if (k === n - 1) {
+        newAmounts.set(line.id, newTotal - runningSum)
+      } else {
+        const rounded = Math.round(line.amount * scale)
+        newAmounts.set(line.id, rounded)
+        runningSum += rounded
+      }
     }
   } else {
     // Even split with rounding absorbed by last line

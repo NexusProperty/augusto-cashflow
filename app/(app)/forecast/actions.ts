@@ -119,15 +119,20 @@ export async function updateLineAmounts(
   }
 
   const supabase = await createClient()
-  const failedIds: string[] = []
-  for (const u of allowed) {
-    const { error } = await supabase
-      .from('forecast_lines')
-      .update({ amount: u.amount, updated_at: new Date().toISOString() })
-      .eq('id', u.id)
-    if (error) failedIds.push(u.id)
+  // Atomic batched update via RPC — either every row updates or none do.
+  // Replaces the per-row loop which could leave partial state on failure.
+  const rpc = supabase.rpc as unknown as (
+    name: string,
+    args: unknown,
+  ) => Promise<{ error: { message: string } | null }>
+  const { error } = await rpc('update_forecast_line_amounts', { p_updates: allowed })
+  if (error) {
+    return {
+      error: 'Batch update failed',
+      failedIds: allowed.map((u) => u.id),
+      outOfScopeIds: outOfScope,
+    }
   }
-  if (failedIds.length > 0) return { error: 'Some updates failed', failedIds, outOfScopeIds: outOfScope }
   return {
     ok: true,
     count: allowed.length,

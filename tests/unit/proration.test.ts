@@ -260,4 +260,27 @@ describe('prorateSubtotal', () => {
       { id: 'e2', amount: 20 },
     ])
   })
+
+  it('proportional path: sum of rounded values equals newTotal exactly (running-sum correction)', () => {
+    // 3 lines whose naive per-line rounding would accumulate drift.
+    const lines = [
+      makeLine({ id: 'a', categoryId: 'outflows_payroll_salaries', amount: 33 }),
+      makeLine({ id: 'b', categoryId: 'outflows_payroll_super', amount: 33 }),
+      makeLine({ id: 'c', categoryId: 'outflows_payroll_tax', amount: 34 }),
+    ]
+
+    const result = prorateSubtotal(lines, PAYROLL_SUBS, 'p1', 101)
+    const sum = result.updated.reduce((s, l) => s + l.amount, 0)
+    expect(sum).toBe(101)
+  })
+
+  it('proportional path with many lines: sum always equals newTotal', () => {
+    const lines = Array.from({ length: 15 }, (_, i) =>
+      makeLine({ id: `l${i}`, categoryId: 'outflows_payroll_salaries', amount: 7 + (i % 3) }),
+    )
+    const current = lines.reduce((s, l) => s + l.amount, 0)
+    const result = prorateSubtotal(lines, PAYROLL_SUBS, 'p1', current * 2 + 7)
+    const sum = result.updated.reduce((s, l) => s + l.amount, 0)
+    expect(sum).toBe(current * 2 + 7)
+  })
 })
