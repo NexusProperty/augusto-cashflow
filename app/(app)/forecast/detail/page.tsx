@@ -2,7 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { loadForecastData, loadScenarioOverrides } from '@/lib/forecast/queries'
 import { generateRecurringLines } from '@/lib/forecast/recurring'
 import { computeWeekSummaries, applyScenarioOverrides } from '@/lib/forecast/engine'
-import { AUGUSTO_GROUP_ID } from '@/lib/types'
+import { AUGUSTO_GROUP_ID, type BankAccount } from '@/lib/types'
+import { MAIN_FORECAST_BANK_NAMES } from '@/lib/forecast/constants'
 import { ForecastGrid } from '@/components/forecast/forecast-grid'
 import { ScenarioToolbar } from '@/components/forecast/scenario-toolbar'
 import { weekEndingLabel } from '@/lib/utils'
@@ -29,12 +30,32 @@ export default async function ForecastDetailPage({
   const overrides = await loadScenarioOverrides(supabase, params.scenario)
   const { lines: allLines, overriddenIds } = applyScenarioOverrides(baseLines, overrides, data.periods)
 
+  // Load the 4 main bank accounts for per-bank opening-balance rows in Section 1.
+  const { data: rawBankAccounts } = await supabase
+    .from('bank_accounts')
+    .select('id, entity_id, name, account_type, account_number, od_limit, opening_balance, is_active, notes')
+    .in('name', [...MAIN_FORECAST_BANK_NAMES])
+    .eq('is_active', true)
+
+  const bankAccounts: BankAccount[] = (rawBankAccounts ?? []).map((b: any) => ({
+    id: String(b.id),
+    entityId: String(b.entity_id ?? ''),
+    name: String(b.name ?? ''),
+    accountType: (b.account_type as string | null) ?? null,
+    accountNumber: (b.account_number as string | null) ?? null,
+    odLimit: Number(b.od_limit) || 0,
+    openingBalance: Number(b.opening_balance) || 0,
+    isActive: b.is_active ?? true,
+    notes: (b.notes as string | null) ?? null,
+  }))
+
   const summaries = computeWeekSummaries(
     data.periods,
     allLines,
     data.categories,
     data.entityGroup?.odFacilityLimit ?? 0,
     weighted,
+    bankAccounts,
   )
 
   const { data: scenariosRaw } = await supabase
@@ -72,6 +93,7 @@ export default async function ForecastDetailPage({
         categories={data.categories}
         lines={allLines}
         summaries={summaries}
+        bankAccounts={bankAccounts}
         entities={(data.entities ?? []).map((e: any) => ({
           id: String(e.id),
           name: String(e.name ?? ''),

@@ -4,7 +4,8 @@
  * without pulling React / JSX parsing into the test transform pipeline.
  */
 
-import type { Category, ForecastLine } from '@/lib/types'
+import type { BankAccount, Category, ForecastLine } from '@/lib/types'
+import { MAIN_FORECAST_BANK_NAMES } from './constants'
 
 // ── Group types (P3.4) ────────────────────────────────────────────────────────
 
@@ -58,6 +59,18 @@ export type FlatRow =
        * localLines. Computed during buildFlatRows for rendering (sums etc.).
        */
       memberItemKeys: string[]
+    }
+  | {
+      /**
+       * One row per main bank inside the Opening Bank Balance section
+       * (section.flowDirection === 'balance'). Week 1 is editable and
+       * backed by `bank_accounts.opening_balance`; weeks 2-18 are
+       * computed (prior week's closing for this bank).
+       */
+      kind: 'bank-opening'
+      sectionId: string
+      bankAccountId: string
+      bankName: string
     }
 
 /** Build the unique item key used by buildFlatRows (category::label). */
@@ -123,14 +136,40 @@ export function buildFlatRows(
   lines: ForecastLine[],
   collapsed: Record<string, boolean>,
   groups?: RowGroupMap,
+  bankAccounts?: BankAccount[],
 ): FlatRow[] {
   const rows: FlatRow[] = []
   const categoryById = new Map<string, Category>()
   for (const c of categories) categoryById.set(c.id, c)
 
+  // Resolve the main banks in canonical render order. We only include banks
+  // that both exist in `bankAccounts` AND are listed in MAIN_FORECAST_BANK_NAMES.
+  const mainBanksInOrder: BankAccount[] = bankAccounts
+    ? MAIN_FORECAST_BANK_NAMES
+        .map((name) => bankAccounts.find((b) => b.name === name))
+        .filter((b): b is BankAccount => Boolean(b))
+    : []
+
   for (const section of sections) {
     rows.push({ kind: 'sectionHeader', sectionId: section.id })
     if (collapsed[section.id]) continue
+
+    // Opening Bank Balance section (flow_direction === 'balance'):
+    // emit one bank-opening row per main bank instead of the default
+    // subtotal/item rows. Banks not in the loaded list are skipped.
+    if (section.flowDirection === 'balance') {
+      if (mainBanksInOrder.length > 0) {
+        for (const bank of mainBanksInOrder) {
+          rows.push({
+            kind: 'bank-opening',
+            sectionId: section.id,
+            bankAccountId: bank.id,
+            bankName: bank.name,
+          })
+        }
+      }
+      continue
+    }
 
     const children = categories
       .filter((c) => c.parentId === section.id)
@@ -234,9 +273,35 @@ export function buildFlatRows(
       }
 
       // Ungrouped items that belong to this sub (preserve itemMap order).
+      const ungroupedForSub: string[] = []
       for (const [key] of itemMap) {
         if (emittedItemKeys.has(key)) continue
         if (itemKeyToSubId.get(key) !== sub.id) continue
+        ungroupedForSub.push(key)
+      }
+
+      // Suppress the auto-created "Line item" row when it's the sole detail
+      // under a sub and the user hasn't named it: subtotal + single default
+      // line would render identical values, which reads as visual doubling.
+      // The row re-appears the moment a second line is added or the user
+      // sets a counterparty/notes. Subtotal writes still land on the hidden
+      // line via prorateSubtotal (updates existing) rather than creating
+      // duplicates.
+      if (ungroupedForSub.length === 1) {
+        const only = ungroupedForSub[0]!
+        const onlyLines = itemMap.get(only) ?? []
+        const isDefaultLabel = onlyLines.every(
+          (l) =>
+            (l.counterparty == null || l.counterparty === '') &&
+            (l.notes == null || l.notes === ''),
+        )
+        if (isDefaultLabel) {
+          emittedItemKeys.add(only)
+          continue
+        }
+      }
+
+      for (const key of ungroupedForSub) {
         emittedItemKeys.add(key)
         pushItemRow(key)
       }
@@ -260,6 +325,8 @@ export function isFocusable(row: FlatRow | undefined): boolean {
   if (!row) return false
   if (row.kind === 'item') return !row.isPipeline
   if (row.kind === 'subtotal') return row.editable
+  // bank-opening rows are focus targets (week-1 cell editable; weeks 2-18 read-only).
+  if (row.kind === 'bank-opening') return true
   // 'sectionHeader' and 'group' rows are not focus targets.
   return false
 }

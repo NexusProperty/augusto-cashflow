@@ -8,7 +8,7 @@
  * with " and internal " doubled to "").
  */
 
-import type { Category, ForecastLine, Period, WeekSummary } from '@/lib/types'
+import type { BankAccount, Category, ForecastLine, Period, WeekSummary } from '@/lib/types'
 import type { FlatRow } from './flat-rows'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -26,6 +26,14 @@ export interface ExportArgs {
   filterRowSet?: Set<number> | null
   // For 'selection':
   selectedCellKeys?: Set<string>
+  /**
+   * When set, bank-opening rows emit their per-week displayed opening balance
+   * (week-1 = localBankBalances[bankId] ?? bank.openingBalance; weeks 2-18 =
+   * summaries[w].byBank.find(...).openingBalance). If not provided,
+   * bank-opening rows emit empty amounts.
+   */
+  bankAccounts?: BankAccount[]
+  localBankBalances?: Record<string, number>
 }
 
 // ── CSV encoding ───────────────────────────────────────────────────────────────
@@ -95,6 +103,7 @@ function isRowAllZeros(
 ): boolean {
   if (fr.kind === 'sectionHeader') return false
   if (fr.kind === 'group') return false  // group headers always emit
+  if (fr.kind === 'bank-opening') return false // always emit bank rows
   if (fr.kind === 'subtotal') {
     return periodIds.every(
       (pid) => computeSubtotal(fr.subCategoryIds, pid, lines) === 0,
@@ -121,7 +130,16 @@ export function buildCsv(args: ExportArgs): string {
     collapsed = {},
     filterRowSet = null,
     selectedCellKeys,
+    bankAccounts,
+    localBankBalances,
   } = args
+
+  // Pre-index summaries by period for quick byBank lookup when emitting
+  // bank-opening rows.
+  const summaryByPeriodId = new Map<string, WeekSummary>()
+  if (summaries) for (const s of summaries) summaryByPeriodId.set(s.periodId, s)
+  const bankById = new Map<string, BankAccount>()
+  if (bankAccounts) for (const b of bankAccounts) bankById.set(b.id, b)
 
   const periodIds = periods.map((p) => p.id)
 
@@ -205,6 +223,25 @@ export function buildCsv(args: ExportArgs): string {
       // Group header: emit label + empty period values (member rows follow).
       label = `  [Group] ${fr.group.label}`
       periodValues = activePeriods.map(() => '')
+    } else if (fr.kind === 'bank-opening') {
+      label = fr.bankName
+      periodValues = activePeriods.map((p, activeIdx) => {
+        // Determine the original column index for this active period so we
+        // can tell whether it's week 1 or a cascaded week.
+        const originalColIdx = periods.findIndex((pp) => pp.id === p.id)
+        if (originalColIdx === 0) {
+          // Week 1 = editable opening balance from localBankBalances (or DB fallback).
+          const override = localBankBalances?.[fr.bankAccountId]
+          if (override !== undefined) return override
+          return bankById.get(fr.bankAccountId)?.openingBalance ?? 0
+        }
+        // Weeks 2-18 = computed from summaries[byBank].
+        const s = summaryByPeriodId.get(p.id)
+        const bb = s?.byBank.find((b) => b.bankAccountId === fr.bankAccountId)
+        // Fallback: unused `activeIdx` is intentional — original index drives week logic.
+        void activeIdx
+        return bb?.openingBalance ?? 0
+      })
     } else {
       // item
       label = itemLabel(fr)

@@ -45,7 +45,8 @@ import { evaluateFormula, type EvalContext } from '@/lib/forecast/formula'
 import { buildCsv } from '@/lib/forecast/export'
 import { FindBar } from './find-bar'
 import { weekEndingLabel, formatCurrency, cn } from '@/lib/utils'
-import type { ForecastLine, LineStatus, Period, Category, WeekSummary } from '@/lib/types'
+import { updateBankOpeningBalance } from '@/app/(app)/forecast/actions'
+import type { BankAccount, ForecastLine, LineStatus, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
 
 // ── Freeze-columns hook ───────────────────────────────────────────────────────
@@ -293,6 +294,12 @@ interface ForecastGridProps {
   weighted?: boolean
   odFacilityLimit?: number
   scenarioId?: string | null
+  /**
+   * Main bank accounts for Section 1 per-bank opening-balance rows.
+   * When provided, the engine runs in per-bank mode and Section 1
+   * renders one editable bank row per account (in MAIN_FORECAST_BANK_NAMES order).
+   */
+  bankAccounts?: BankAccount[]
 }
 
 export function ForecastGrid({
@@ -306,6 +313,7 @@ export function ForecastGrid({
   weighted = true,
   odFacilityLimit = 0,
   scenarioId = null,
+  bankAccounts: bankAccountsProp,
 }: ForecastGridProps) {
   const [isPending, startTransition] = useTransition()
 
@@ -378,11 +386,39 @@ export function ForecastGrid({
   const formulaGraphRef = useRef<Map<string, string[]>>(new Map())
   const periodsRef = useRef(periods)
 
+  // ── Per-bank opening balances (Section 1) ─────────────────────────────────
+  // Optimistic week-1 balances keyed by bank id. Seeded from server props and
+  // updated immediately on user edits so the engine can recompute cascades.
+  const [localBankBalances, setLocalBankBalances] = useState<Record<string, number>>(() => {
+    const init: Record<string, number> = {}
+    if (bankAccountsProp) {
+      for (const b of bankAccountsProp) init[b.id] = b.openingBalance
+    }
+    return init
+  })
+  // Resync when the server props change (e.g. revalidatePath) and no save is in flight.
+  useEffect(() => {
+    if (isPending) return
+    if (!bankAccountsProp) return
+    const next: Record<string, number> = {}
+    for (const b of bankAccountsProp) next[b.id] = b.openingBalance
+    setLocalBankBalances(next)
+  }, [bankAccountsProp, isPending])
+
+  // Bank accounts with current optimistic opening balances (fed to the engine).
+  const bankAccountsForEngine = useMemo<BankAccount[] | undefined>(() => {
+    if (!bankAccountsProp) return undefined
+    return bankAccountsProp.map((b) => ({
+      ...b,
+      openingBalance: localBankBalances[b.id] ?? b.openingBalance,
+    }))
+  }, [bankAccountsProp, localBankBalances])
+
   // Derive summaries from local state so edits cascade to NetOperating,
   // ClosingBalance, AvailableCash, OD Status immediately.
   const summaries = useMemo(
-    () => computeWeekSummaries(periods, localLines, categories, odFacilityLimit, weighted),
-    [periods, localLines, categories, odFacilityLimit, weighted],
+    () => computeWeekSummaries(periods, localLines, categories, odFacilityLimit, weighted, bankAccountsForEngine),
+    [periods, localLines, categories, odFacilityLimit, weighted, bankAccountsForEngine],
   )
   // `summariesProp` is retained for first-render parity / fallback.
   const summaryMap = useMemo(
@@ -793,6 +829,12 @@ export function ForecastGrid({
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {}
     for (const section of sections) {
+      // The Opening Bank Balance section is always expanded on load — bank rows
+      // are the section's content and the user needs to see/edit week-1 openings.
+      if (section.flowDirection === 'balance') {
+        init[section.id] = false
+        continue
+      }
       const children = categories.filter((c) => c.parentId === section.id)
       const hasData = linesProp.some((l) => {
         if (l.amount === 0) return false
@@ -828,8 +870,8 @@ export function ForecastGrid({
   // ── Flat rows for focus navigation ────────────────────────────────────────
 
   const flatRows = useMemo(
-    () => buildFlatRows(sections, categories, localLines, collapsed, groups),
-    [sections, categories, localLines, collapsed, groups],
+    () => buildFlatRows(sections, categories, localLines, collapsed, groups, bankAccountsForEngine),
+    [sections, categories, localLines, collapsed, groups, bankAccountsForEngine],
   )
 
   // ── Formula dependency graph ───────────────────────────────────────────────
@@ -1364,7 +1406,57 @@ export function ForecastGrid({
       return { ok: true }
     },
     onReplayBulkAdd: bulkAddForecastLines,
+    onReplayBankOpening: async (bankAccountId, value) => {
+      // Apply optimistic local change; server call then refreshes on success.
+      setLocalBankBalances((prev) => ({ ...prev, [bankAccountId]: value }))
+      const res = await updateBankOpeningBalance({ bankAccountId, openingBalance: value })
+      if (res && 'error' in res) return { error: res.error ?? 'Update failed' }
+      return { ok: true }
+    },
   })
+
+  // ── Per-bank opening balance commit (Section 1 week-1 edit) ────────────────
+  const handleBankOpeningCommit = useCallback(
+    (bankAccountId: string, nextValue: number) => {
+      const prevValue = localBankBalances[bankAccountId]
+        ?? bankAccountsProp?.find((b) => b.id === bankAccountId)?.openingBalance
+        ?? 0
+      if (prevValue === nextValue) return
+      // Optimistic update.
+      setLocalBankBalances((prev) => ({ ...prev, [bankAccountId]: nextValue }))
+
+      // Push undo entry before the server call so the user can undo immediately.
+      if (!isReplayingRef.current) {
+        const bankName = bankAccountsProp?.find((b) => b.id === bankAccountId)?.name ?? 'Bank'
+        undoStackRef.current.push({
+          kind: 'bank-opening',
+          bankAccountId,
+          prevValue,
+          nextValue,
+          label: `Edit ${bankName} opening balance`,
+          scenarioId: scenarioId ?? null,
+        })
+      }
+
+      startTransition(() => {
+        updateBankOpeningBalance({ bankAccountId, openingBalance: nextValue })
+          .then((res) => {
+            if (res && 'error' in res) {
+              // Revert optimistic change.
+              setLocalBankBalances((prev) => ({ ...prev, [bankAccountId]: prevValue }))
+              markError(res.error ?? 'Update failed')
+            } else {
+              markSaved()
+            }
+          })
+          .catch((err) => {
+            setLocalBankBalances((prev) => ({ ...prev, [bankAccountId]: prevValue }))
+            markError(err instanceof Error ? err.message : 'Network error')
+          })
+      })
+    },
+    [localBankBalances, bankAccountsProp, scenarioId, isReplayingRef, undoStackRef, startTransition, markError, markSaved],
+  )
 
   // ── Shared commit pipeline (shift, duplicate, copy-forward, split) ────────────
   const commitPlan = useCommitPipeline({
@@ -1720,11 +1812,23 @@ export function ForecastGrid({
           }
         }
         values.push(total)
+      } else if (fr.kind === 'bank-opening') {
+        // Week 1 = localBankBalances; weeks 2-18 = engine-computed opening.
+        if (col === 0) {
+          const v = localBankBalances[fr.bankAccountId]
+            ?? bankAccountsProp?.find((b) => b.id === fr.bankAccountId)?.openingBalance
+            ?? 0
+          values.push(v)
+        } else {
+          const s = summaries.find((ss) => ss.periodId === period.id)
+          const bb = s?.byBank.find((b) => b.bankAccountId === fr.bankAccountId)
+          values.push(bb?.openingBalance ?? 0)
+        }
       }
     }
     if (values.length < 2) return null
     return computeAggregates(values)
-  }, [selectedCellKeys, flatRows, periods, localLines])
+  }, [selectedCellKeys, flatRows, periods, localLines, localBankBalances, bankAccountsProp, summaries])
 
   const handleSetStatus = useCallback(
     (status: LineStatus) => {
@@ -1902,6 +2006,8 @@ export function ForecastGrid({
         collapsed,
         filterRowSet,
         selectedCellKeys,
+        bankAccounts: bankAccountsProp,
+        localBankBalances,
       })
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
       const url = URL.createObjectURL(blob)
@@ -1913,7 +2019,7 @@ export function ForecastGrid({
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
     },
-    [flatRows, periods, localLines, categories, summaries, hideEmpty, collapsed, filterRowSet, selectedCellKeys],
+    [flatRows, periods, localLines, categories, summaries, hideEmpty, collapsed, filterRowSet, selectedCellKeys, bankAccountsProp, localBankBalances],
   )
 
   // ── P3.4: Group popover ───────────────────────────────────────────────────
@@ -2588,6 +2694,10 @@ export function ForecastGrid({
                 groups={groups}
                 onToggleGroup={handleToggleGroup}
                 onUngroup={handleUngroup}
+                bankAccounts={bankAccountsProp}
+                localBankBalances={localBankBalances}
+                summaries={summaries}
+                onBankOpeningCommit={handleBankOpeningCommit}
               />
             ))}
 

@@ -8,7 +8,7 @@ import { buildItemRows, type FlatRow, type RowGroupMap } from '@/lib/forecast/fl
 import { isInRange } from '@/lib/forecast/selection'
 import { isInFillRange } from '@/lib/forecast/fill-handle'
 import { formatCurrency, cn } from '@/lib/utils'
-import type { ForecastLine, Period, Category } from '@/lib/types'
+import type { BankAccount, ForecastLine, Period, Category, WeekSummary } from '@/lib/types'
 import type { Direction } from './inline-cell-keys'
 import { freezeCellStyle } from './forecast-grid'
 
@@ -76,6 +76,10 @@ export const SectionBlock = memo(function SectionBlock({
   groups,
   onToggleGroup,
   onUngroup,
+  bankAccounts,
+  localBankBalances,
+  summaries,
+  onBankOpeningCommit,
 }: {
   section: Category
   categories: Category[]
@@ -120,6 +124,14 @@ export const SectionBlock = memo(function SectionBlock({
   onToggleGroup?: (subId: string, groupId: string) => void
   /** P3.4: remove a group (restore member rows to ungrouped positions). */
   onUngroup?: (subId: string, groupId: string) => void
+  /** Main bank accounts (for bank-opening row rendering). */
+  bankAccounts?: BankAccount[]
+  /** Optimistic week-1 bank opening balances keyed by bank id. */
+  localBankBalances?: Record<string, number>
+  /** Engine summaries — used to render cascaded weeks 2-18 for bank-opening rows. */
+  summaries?: WeekSummary[]
+  /** Commit handler for a week-1 bank opening edit. */
+  onBankOpeningCommit?: (bankAccountId: string, value: number) => void
 }) {
   const style = getSectionStyle(section.flowDirection)
 
@@ -146,14 +158,24 @@ export const SectionBlock = memo(function SectionBlock({
     return keys
   }, [itemMap])
 
-  const allZero = useMemo(() => sectionLines.every((l) => l.amount === 0), [sectionLines])
+  const allZero = useMemo(() => {
+    if (section.flowDirection === 'balance') return false
+    return sectionLines.every((l) => l.amount === 0)
+  }, [sectionLines, section.flowDirection])
 
   const sectionTotals = useMemo(
     () =>
-      periods.map((p) =>
-        sectionLines.filter((l) => l.periodId === p.id).reduce((sum, l) => sum + l.amount, 0),
-      ),
-    [periods, sectionLines],
+      periods.map((p) => {
+        // Opening Bank Balance section: total = group opening (sum of bank openings)
+        // taken from the engine summary for this period when available.
+        if (section.flowDirection === 'balance') {
+          const s = summaries?.find((ss) => ss.periodId === p.id)
+          if (s) return s.openingBalance
+          return 0
+        }
+        return sectionLines.filter((l) => l.periodId === p.id).reduce((sum, l) => sum + l.amount, 0)
+      }),
+    [periods, sectionLines, section.flowDirection, summaries],
   )
 
   return (
@@ -211,7 +233,98 @@ export const SectionBlock = memo(function SectionBlock({
         <>
           {flatRows.map((fr, flatIdx) => {
             if (fr.sectionId !== section.id) return null
-            if (fr.kind !== 'subtotal' && fr.kind !== 'item' && fr.kind !== 'group') return null
+            if (
+              fr.kind !== 'subtotal' &&
+              fr.kind !== 'item' &&
+              fr.kind !== 'group' &&
+              fr.kind !== 'bank-opening'
+            ) {
+              return null
+            }
+
+            // ── Bank-opening row ─────────────────────────────────────────────
+            if (fr.kind === 'bank-opening') {
+              const bank = bankAccounts?.find((b) => b.id === fr.bankAccountId)
+              const week1Value =
+                localBankBalances?.[fr.bankAccountId] ?? bank?.openingBalance ?? 0
+              return (
+                <tr key={`bank-opening::${fr.bankAccountId}`} className="">
+                  <td className="sticky left-0 z-10 bg-inherit whitespace-nowrap py-1.5 pr-4 pl-10 text-sm">
+                    {fr.bankName}
+                  </td>
+                  {periods.map((p, colIdx) => {
+                    const isFocusedCell =
+                      focus !== null && focus.row === flatIdx && focus.col === colIdx
+                    const inRange = range ? isInRange(range, flatIdx, colIdx) : false
+                    const inExtras = extraSelected.has(`${flatIdx}:${colIdx}`)
+                    const inAnySelection = inRange || inExtras
+                    const isAnchor =
+                      anchor !== null && anchor.row === flatIdx && anchor.col === colIdx
+                    const isFindHighlight =
+                      highlightCell !== null &&
+                      highlightCell !== undefined &&
+                      highlightCell.row === flatIdx &&
+                      highlightCell.col === colIdx
+                    const { sticky: cellSticky, left: cellLeft } = freezeCellStyle(
+                      colIdx,
+                      freezeCount,
+                    )
+                    const stickyLeft = cellSticky ? cellLeft : undefined
+
+                    if (colIdx === 0) {
+                      // Editable week-1 opening balance.
+                      return (
+                        <InlineCell
+                          key={p.id}
+                          value={week1Value}
+                          isNegative={week1Value < 0}
+                          isComputed={false}
+                          onSave={(newValue) => {
+                            if (newValue !== week1Value) {
+                              onBankOpeningCommit?.(fr.bankAccountId, newValue)
+                            }
+                          }}
+                          onMoveFocus={(dir) => onMoveFocus(flatIdx, colIdx, dir)}
+                          selection={{
+                            isFocused: isFocusedCell,
+                            inSelectionRange: inAnySelection,
+                            isAnchor,
+                            isFindHighlight,
+                          }}
+                          rowIdx={flatIdx}
+                          colIdx={colIdx}
+                          stickyLeft={stickyLeft}
+                        />
+                      )
+                    }
+                    // Weeks 2-18 are computed: prior week's closing for this bank.
+                    const s = summaries?.find((ss) => ss.periodId === p.id)
+                    const bb = s?.byBank.find((b) => b.bankAccountId === fr.bankAccountId)
+                    const computed = bb?.openingBalance ?? 0
+                    return (
+                      <td
+                        key={p.id}
+                        tabIndex={0}
+                        data-row={flatIdx}
+                        data-col={colIdx}
+                        title="= prior week's closing for this account"
+                        className={cn(
+                          'relative bg-zinc-50/60 px-2.5 py-1.5 text-right text-sm tabular-nums text-zinc-700 outline-none',
+                          computed < 0 && 'text-red-600',
+                          inAnySelection && !isFocusedCell && (isAnchor ? 'bg-indigo-100' : 'bg-indigo-50'),
+                          isFocusedCell && 'ring-2 ring-indigo-500',
+                          isFindHighlight && 'ring-2 ring-yellow-400',
+                          cellSticky && 'sticky z-[15]',
+                        )}
+                        style={cellSticky ? { left: cellLeft } : undefined}
+                      >
+                        {formatCurrency(computed)}
+                      </td>
+                    )
+                  })}
+                </tr>
+              )
+            }
 
             // ── Subtotal row ─────────────────────────────────────────────────
             if (fr.kind === 'subtotal') {

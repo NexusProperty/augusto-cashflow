@@ -130,7 +130,15 @@ export function buildMatchList({
   for (let rowIdx = 0; rowIdx < flatRows.length; rowIdx++) {
     const fr = flatRows[rowIdx]!
 
-    // Only item rows have searchable data.
+    // Bank-opening rows: bank name is searchable row-level text.
+    if (fr.kind === 'bank-opening') {
+      if (fr.bankName.toLowerCase().includes(qLower)) {
+        matches.push({ row: rowIdx, col: null, hitKind: 'counterparty' })
+      }
+      continue
+    }
+
+    // Only item rows have searchable data beyond bank rows.
     if (fr.kind !== 'item') continue
 
     // Gather all lines for this row (one per period, keyed by periodId).

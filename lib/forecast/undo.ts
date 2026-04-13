@@ -42,6 +42,19 @@ export type AtomicUndoEntry =
       label: string
       scenarioId: string | null
     }
+  | {
+      /**
+       * A per-bank opening-balance edit on bank_accounts.opening_balance.
+       * Replayed via the server action `updateBankOpeningBalance`, not via
+       * forecast_lines. Week-1 editable; weeks 2-18 cascade through the engine.
+       */
+      kind: 'bank-opening'
+      bankAccountId: string
+      prevValue: number
+      nextValue: number
+      label: string
+      scenarioId: string | null
+    }
 
 export type UndoEntry =
   | AtomicUndoEntry

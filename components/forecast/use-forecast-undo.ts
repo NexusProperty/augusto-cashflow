@@ -52,6 +52,14 @@ export interface UseForecastUndoDeps {
   onReplayBulkAdd: (
     rows: BulkAddRow[],
   ) => Promise<{ ok: true; data: ForecastLine[] } | { error: string }>
+  /**
+   * Called for `bank-opening` undo/redo. Applies the given value to the
+   * bank's opening_balance on the server (and the grid's local state).
+   */
+  onReplayBankOpening?: (
+    bankAccountId: string,
+    value: number,
+  ) => Promise<{ ok: true } | { error: string }>
 }
 
 // ── Hook return ───────────────────────────────────────────────────────────────
@@ -79,6 +87,7 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
     onReplayStatus,
     onReplayDelete,
     onReplayBulkAdd,
+    onReplayBankOpening,
   } = deps
 
   // ── Stack + guard refs ────────────────────────────────────────────────────
@@ -181,6 +190,16 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
           return
         }
         setLocalLines((cur) => [...cur, ...result.data])
+      } else if (entry.kind === 'bank-opening') {
+        if (!onReplayBankOpening) {
+          markError('Undo not supported in this view')
+          return
+        }
+        const res = await onReplayBankOpening(entry.bankAccountId, entry.prevValue)
+        if ('error' in res) {
+          markError(res.error)
+          return
+        }
       } else if (entry.kind === 'compound') {
         // Delegate to each sub-entry's existing replay path in order.
         // isReplayingRef is already true so sub-entry replays won't push
@@ -258,7 +277,7 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
     } finally {
       isReplayingRef.current = false
     }
-  }, [scenarioId, onReplayAmounts, onReplayStatus, onReplayDelete, onReplayBulkAdd, setLocalLines, localLinesRef, markError, markUndone])
+  }, [scenarioId, onReplayAmounts, onReplayStatus, onReplayDelete, onReplayBulkAdd, onReplayBankOpening, setLocalLines, localLinesRef, markError, markUndone])
 
   // ── replayRedo ────────────────────────────────────────────────────────────
 
@@ -307,6 +326,16 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
         }
         const idsToRemove = new Set(entry.lines.map((l) => l.id))
         setLocalLines((cur) => cur.filter((l) => !idsToRemove.has(l.id)))
+      } else if (entry.kind === 'bank-opening') {
+        if (!onReplayBankOpening) {
+          markError('Redo not supported in this view')
+          return
+        }
+        const res = await onReplayBankOpening(entry.bankAccountId, entry.nextValue)
+        if ('error' in res) {
+          markError(res.error)
+          return
+        }
       } else if (entry.kind === 'compound') {
         // Replay forward: each sub-entry's redo path, in order.
         //
@@ -386,7 +415,7 @@ export function useForecastUndo(deps: UseForecastUndoDeps): UseForecastUndoRetur
     } finally {
       isReplayingRef.current = false
     }
-  }, [scenarioId, onReplayAmounts, onReplayStatus, onReplayDelete, onReplayBulkAdd, setLocalLines, markError, markRedone])
+  }, [scenarioId, onReplayAmounts, onReplayStatus, onReplayDelete, onReplayBulkAdd, onReplayBankOpening, setLocalLines, markError, markRedone])
 
   return {
     undoStackRef,
