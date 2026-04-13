@@ -77,6 +77,8 @@ interface InlineCellProps {
    * Used for the freeze-columns feature. Hardcoded: 280px label + 100px per week col.
    */
   stickyLeft?: number
+  /** Right-click handler — used by forecast-grid to open the split-cell modal. */
+  onContextMenu?: (e: React.MouseEvent) => void
 }
 
 function FillHandle({
@@ -125,6 +127,7 @@ export const InlineCell = memo(function InlineCell({
   isFindHighlight,
   note,
   stickyLeft,
+  onContextMenu,
 }: InlineCellProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -178,6 +181,7 @@ export const InlineCell = memo(function InlineCell({
           className,
         )}
         style={stickyLeft !== undefined ? { left: stickyLeft } : undefined}
+        onContextMenu={onContextMenu}
         onKeyDown={(e) => {
           // Read-only cells still support navigation.
           const result = interpretKeyNotEditing(e)
@@ -284,6 +288,7 @@ export const InlineCell = memo(function InlineCell({
         className,
       )}
       style={stickyLeft !== undefined ? { left: stickyLeft } : undefined}
+      onContextMenu={onContextMenu}
       onClick={(e) => {
         // Modifier-clicks are for selection (grid mousedown handles them).
         if (e.ctrlKey || e.metaKey || e.shiftKey) return

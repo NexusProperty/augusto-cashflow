@@ -35,6 +35,7 @@ import {
 import { toTSV, parseTSV, parseClipboardNumber } from '@/lib/forecast/clipboard'
 import { computeFillHandleRange, isInFillRange, detectPattern, materialisePattern } from '@/lib/forecast/fill-handle'
 import { planShift } from '@/lib/forecast/shift-by-weeks'
+import { planSplitCell, parseSplitAmounts, type SplitCellPlan } from '@/lib/forecast/split-cell'
 import { buildMatchList, nextMatchIndex, prevMatchIndex, type FindMatch } from '@/lib/forecast/find'
 import { buildCsv } from '@/lib/forecast/export'
 import { FindBar } from './find-bar'
@@ -108,6 +109,143 @@ function FreezePicker({
     </select>
   )
 }
+
+// ── SplitCellModal ────────────────────────────────────────────────────────────
+
+interface SplitCellModalProps {
+  sourceLine: ForecastLine
+  sourceRow: { kind: 'item'; lineByPeriod: Map<string, ForecastLine>; isPipeline: boolean }
+  sourceCol: number
+  periodLabel: string
+  periods: Array<{ id: string }>
+  onApply: (plan: SplitCellPlan) => void
+  onClose: () => void
+}
+
+function SplitCellModal({
+  sourceLine,
+  sourceRow,
+  sourceCol,
+  periodLabel,
+  periods,
+  onApply,
+  onClose,
+}: SplitCellModalProps) {
+  const [inputValue, setInputValue] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Auto-focus the input on mount.
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  // Escape → close.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  const parseResult = parseSplitAmounts(inputValue)
+  const plan =
+    parseResult.ok
+      ? planSplitCell({ sourceLine, sourceRow, sourceCol, amounts: parseResult.values, periods })
+      : null
+
+  const isValid = parseResult.ok && plan !== null && (plan.updates.length > 0 || plan.creates.length > 0)
+
+  const handleApply = () => {
+    if (!plan || !isValid) return
+    onApply(plan)
+  }
+
+  return (
+    // Backdrop
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+      onMouseDown={(e) => {
+        // Click outside the modal card → close.
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      {/* Modal card */}
+      <div
+        className="w-[400px] rounded-xl border border-zinc-200 bg-white shadow-xl"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="border-b border-zinc-100 px-5 py-4">
+          <h2 className="text-sm font-semibold text-zinc-900">Split cell across weeks</h2>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            {sourceLine.counterparty ?? 'Line item'} &middot; w/e {periodLabel} &middot; {formatCurrency(sourceLine.amount)}
+          </p>
+        </div>
+
+        {/* Body */}
+        <div className="px-5 py-4">
+          <label className="mb-1.5 block text-xs font-medium text-zinc-700">
+            Amounts (comma-separated)
+          </label>
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder="e.g. 4000, 6000, 2000"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && isValid) {
+                e.preventDefault()
+                handleApply()
+              }
+            }}
+            className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+          />
+
+          {/* Live preview / error */}
+          <div className="mt-2 min-h-[20px] text-xs">
+            {inputValue.trim() && !parseResult.ok && (
+              <span className="text-red-600">{parseResult.error}</span>
+            )}
+            {isValid && plan && plan.collisions > 0 && (
+              <span className="text-amber-600">
+                {plan.collisions} existing {plan.collisions === 1 ? 'cell' : 'cells'} will be overwritten
+              </span>
+            )}
+            {isValid && plan && plan.collisions === 0 && (
+              <span className="text-zinc-400">
+                {plan.updates.length + plan.creates.length} {plan.updates.length + plan.creates.length === 1 ? 'cell' : 'cells'} affected
+                {plan.skipped > 0 ? `, ${plan.skipped} skipped (out of range or pipeline)` : ''}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 border-t border-zinc-100 px-5 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleApply}
+            disabled={!isValid}
+            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Apply
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── ForecastGridProps ─────────────────────────────────────────────────────────
 
 interface ForecastGridProps {
   periods: Period[]
@@ -2114,6 +2252,204 @@ export function ForecastGrid({
   // the latest closure of handleDuplicateRight.
   useEffect(() => { handleDuplicateRightRef.current = handleDuplicateRight }, [handleDuplicateRight])
 
+  // ── Split cell modal state ────────────────────────────────────────────────
+
+  interface SplitModalContext {
+    sourceLine: ForecastLine
+    sourceRow: { kind: 'item'; lineByPeriod: Map<string, ForecastLine>; isPipeline: boolean }
+    sourceCol: number
+    periodLabel: string
+  }
+
+  const [splitModal, setSplitModal] = useState<SplitModalContext | null>(null)
+
+  const handleSplitCellOpen = useCallback(
+    (
+      e: React.MouseEvent,
+      line: ForecastLine | undefined,
+      periodId: string,
+      colIdx: number,
+      lineByPeriod: Map<string, ForecastLine>,
+      isPipeline: boolean,
+    ) => {
+      e.preventDefault()
+      // Guard: no line, pipeline row, or zero amount → do nothing.
+      if (!line || isPipeline || line.amount === 0) return
+
+      // Find the period label (week ending date).
+      const period = periods.find((p) => p.id === periodId)
+      const periodLabel = period ? weekEndingLabel(new Date(period.weekEnding)) : periodId
+
+      setSplitModal({
+        sourceLine: line,
+        sourceRow: { kind: 'item', lineByPeriod, isPipeline },
+        sourceCol: colIdx,
+        periodLabel,
+      })
+    },
+    [periods],
+  )
+
+  const commitSplit = useCallback(
+    async (plan: ReturnType<typeof planSplitCell>) => {
+      if (plan.updates.length === 0 && plan.creates.length === 0) return
+
+      // ── Optimistic local update ─────────────────────────────────────────
+      const oldAmounts = plan.updates.map((u) => ({
+        id: u.id,
+        amount: snapshotRef.current.get(u.id) ?? 0,
+      }))
+      for (const u of plan.updates) snapshotRef.current.set(u.id, u.amount)
+      if (plan.updates.length > 0) applyLocal(plan.updates)
+
+      const tempLines: ForecastLine[] = plan.creates.map((c) => ({
+        id: c.tempId,
+        entityId: c.entityId,
+        categoryId: c.categoryId,
+        periodId: c.periodId,
+        amount: c.amount,
+        confidence: 100,
+        source: 'manual' as const,
+        counterparty: c.counterparty,
+        notes: c.notes,
+        sourceDocumentId: null,
+        sourceRuleId: null,
+        sourcePipelineProjectId: null,
+        lineStatus: c.lineStatus,
+      }))
+      if (tempLines.length > 0) {
+        setLocalLines((prev) => [...prev, ...tempLines])
+      }
+
+      // ── Server calls ────────────────────────────────────────────────────
+      startTransition(() => {
+        const doSplit = async () => {
+          const [updateResult, createResult] = await Promise.all([
+            plan.updates.length > 0
+              ? updateLineAmounts({ updates: plan.updates })
+              : Promise.resolve({ ok: true as const, count: 0 }),
+            plan.creates.length > 0
+              ? bulkAddForecastLines(
+                  plan.creates.map((c) => ({
+                    entityId: c.entityId,
+                    categoryId: c.categoryId,
+                    periodId: c.periodId,
+                    amount: c.amount,
+                    counterparty: c.counterparty,
+                    notes: c.notes,
+                    lineStatus: c.lineStatus,
+                    source: 'manual',
+                    confidence: 100,
+                  })),
+                )
+              : Promise.resolve({ ok: true as const, data: [] as ForecastLine[] }),
+          ])
+
+          // ── Error handling ──────────────────────────────────────────────
+          if ('error' in updateResult) {
+            applyLocal(oldAmounts)
+            for (const o of oldAmounts) snapshotRef.current.set(o.id, o.amount)
+            if (tempLines.length > 0) {
+              const tempIds = new Set(tempLines.map((l) => l.id))
+              setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
+            }
+            markError(updateResult.error ?? 'Split failed')
+            return
+          }
+
+          if ('error' in createResult) {
+            if (tempLines.length > 0) {
+              const tempIds = new Set(tempLines.map((l) => l.id))
+              setLocalLines((prev) => prev.filter((l) => !tempIds.has(l.id)))
+            }
+            if (!isReplayingRef.current && plan.updates.length > 0) {
+              const partialAmountsSub: AtomicUndoEntry = {
+                kind: 'amounts',
+                forward: plan.updates,
+                inverse: oldAmounts,
+                label: 'split amounts (partial)',
+                scenarioId,
+              }
+              undoStackRef.current.push({
+                kind: 'compound',
+                entries: [partialAmountsSub],
+                label: 'Split cell (partial)',
+                scenarioId,
+              })
+            }
+            markError('Split partially failed — amounts saved, new lines not created')
+            return
+          }
+
+          // ── Success ──────────────────────────────────────────────────
+          const createdLines = 'data' in createResult ? createResult.data : []
+
+          const responseByKey = new Map<string, ForecastLine>()
+          for (const row of createdLines) {
+            responseByKey.set(`${row.entityId}|${row.categoryId}|${row.periodId}`, row)
+          }
+
+          if (createdLines.length > 0) {
+            const realByTempId = new Map<string, ForecastLine>()
+            for (const c of plan.creates) {
+              const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
+              const real = responseByKey.get(key)
+              if (real) realByTempId.set(c.tempId, real)
+            }
+            setLocalLines((prev) =>
+              prev.map((l) => {
+                const real = realByTempId.get(l.id)
+                return real ?? l
+              }),
+            )
+            for (const real of createdLines) {
+              if (real) snapshotRef.current.set(real.id, real.amount)
+            }
+          }
+
+          // ── Build and push compound undo entry ─────────────────────
+          if (!isReplayingRef.current) {
+            const amountsSub: AtomicUndoEntry = {
+              kind: 'amounts',
+              forward: plan.updates,
+              inverse: oldAmounts,
+              label: 'split amounts',
+              scenarioId,
+            }
+
+            const createdSubs: AtomicUndoEntry[] = plan.creates
+              .map((c) => {
+                const key = `${c.entityId}|${c.categoryId}|${c.periodId}`
+                const real = responseByKey.get(key)
+                if (!real) return null
+                return {
+                  kind: 'created' as const,
+                  tempId: c.tempId,
+                  realId: real.id,
+                  label: '(inside split)',
+                  scenarioId,
+                }
+              })
+              .filter((s): s is NonNullable<typeof s> => s !== null)
+
+            const totalCells = plan.updates.length + plan.creates.length
+            undoStackRef.current.push({
+              kind: 'compound',
+              entries: [amountsSub, ...createdSubs],
+              label: `Split cell across weeks (${totalCells} cell${totalCells === 1 ? '' : 's'})`,
+              scenarioId,
+            })
+          }
+
+          markSaved()
+        }
+
+        void doSplit()
+      })
+    },
+    [applyLocal, startTransition, markError, markSaved, scenarioId],
+  )
+
   // ── Hidden rows count (footer) ────────────────────────────────────────────
 
   const totalHiddenCount = useMemo(() => {
@@ -2147,6 +2483,22 @@ export function ForecastGrid({
           onPrev={handleFindPrev}
           onClose={handleFindClose}
           onOnlyMatchingChange={setOnlyMatching}
+        />
+      )}
+
+      {/* Split cell modal */}
+      {splitModal && (
+        <SplitCellModal
+          sourceLine={splitModal.sourceLine}
+          sourceRow={splitModal.sourceRow}
+          sourceCol={splitModal.sourceCol}
+          periodLabel={splitModal.periodLabel}
+          periods={periods}
+          onApply={async (plan) => {
+            setSplitModal(null)
+            await commitSplit(plan)
+          }}
+          onClose={() => setSplitModal(null)}
         />
       )}
 
@@ -2363,6 +2715,7 @@ export function ForecastGrid({
                 filterRowSet={filterRowSet}
                 highlightCell={highlightCell}
                 freezeCount={freezeCount}
+                onSplitCellOpen={handleSplitCellOpen}
               />
             ))}
 
@@ -2696,6 +3049,7 @@ const SectionBlock = memo(function SectionBlock({
   filterRowSet,
   highlightCell,
   freezeCount = 0,
+  onSplitCellOpen,
 }: {
   section: Category
   categories: Category[]
@@ -2725,6 +3079,15 @@ const SectionBlock = memo(function SectionBlock({
   highlightCell?: { row: number; col: number } | null
   /** Number of week columns to freeze (0 = off). Propagated from ForecastGrid. */
   freezeCount?: number
+  /** Right-click handler for item cells — opens the split-cell modal. */
+  onSplitCellOpen?: (
+    e: React.MouseEvent,
+    line: ForecastLine | undefined,
+    periodId: string,
+    colIdx: number,
+    lineByPeriod: Map<string, ForecastLine>,
+    isPipeline: boolean,
+  ) => void
 }) {
   const style = getSectionStyle(section.flowDirection)
 
@@ -3050,6 +3413,11 @@ const SectionBlock = memo(function SectionBlock({
                       isFindHighlight={isFindHighlight}
                       note={cellLine?.notes}
                       stickyLeft={stickyLeft}
+                      onContextMenu={
+                        onSplitCellOpen
+                          ? (e) => onSplitCellOpen(e, cellLine, p.id, colIdx, lineMap, isPipeline)
+                          : undefined
+                      }
                     />
                   )
                 })}
