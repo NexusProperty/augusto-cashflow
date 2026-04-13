@@ -20,7 +20,7 @@ export interface FlatRowIndex {
   groupTotal: Map<SummaryMetricKey, number>
 }
 
-interface UseSummaryFindArgs {
+interface UseSummaryGridStateArgs {
   rows: BUSummaryRow[]
   months: string[]
   collapsed: Record<string, boolean>
@@ -28,7 +28,7 @@ interface UseSummaryFindArgs {
   setSelection: React.Dispatch<React.SetStateAction<Selection | null>>
 }
 
-export interface UseSummaryFindResult {
+export interface UseSummaryGridStateResult {
   findOpen: boolean
   findQuery: string
   setFindQuery: (q: string) => void
@@ -49,13 +49,20 @@ export interface UseSummaryFindResult {
   flatRowIndex: FlatRowIndex
 }
 
-export function useSummaryFind({
+/**
+ * Owns the pipeline summary grid's find overlay AND the derived display row
+ * model (flatRows, flatRowIndex, effectiveCollapsed). The two concerns are
+ * fused because the "Only matching rows" find option feeds the collapse
+ * overlay that produces the flat display rows — callers need a single source
+ * of truth, not two hooks racing over the same state.
+ */
+export function useSummaryGridState({
   rows,
   months,
   collapsed,
   setCollapsed,
   setSelection,
-}: UseSummaryFindArgs): UseSummaryFindResult {
+}: UseSummaryGridStateArgs): UseSummaryGridStateResult {
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState('')
   const [findCursor, setFindCursor] = useState<number | null>(null)

@@ -74,6 +74,13 @@ export function SummaryFindBar({
     return `${n} of ${total}`
   })()
 
+  const liveText = (() => {
+    if (!query.trim()) return ''
+    if (total === 0) return 'No matches'
+    const n = currentIndex !== null ? currentIndex + 1 : 1
+    return `Match ${n} of ${total}`
+  })()
+
   return (
     <div
       className={cn(
@@ -96,6 +103,10 @@ export function SummaryFindBar({
           {counterText}
         </span>
       )}
+
+      <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {liveText}
+      </span>
 
       <button
         type="button"

@@ -17,7 +17,7 @@ import {
   type FlatSummaryRow,
   type SummaryMetricKey,
 } from '@/lib/pipeline/summary-flat-rows'
-import { cellsInRange, type Selection } from '@/lib/pipeline/summary-selection'
+import { forEachCellInRange, type Selection } from '@/lib/pipeline/summary-selection'
 import { getMonthLabel } from '@/lib/pipeline/fiscal-year'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -130,22 +130,22 @@ function buildSelectionCsv(args: ExportSummarySelectionArgs): string {
 
   const monthLabels = months.map((m) => getMonthLabel(m))
 
-  for (const { row: r, col: c } of cellsInRange(selection)) {
+  forEachCellInRange(selection, months.length, (r, c, isTotalCol) => {
     const fr = flatRows[r]
-    if (!fr) continue
+    if (!fr) return
     let monthField: string
     let value: number
-    if (c < months.length) {
-      monthField = monthLabels[c] ?? ''
-      value = fr.values[c] ?? 0
-    } else if (c === months.length) {
+    if (isTotalCol) {
       monthField = 'Total'
       value = sumArray(fr.values)
+    } else if (c < months.length) {
+      monthField = monthLabels[c] ?? ''
+      value = fr.values[c] ?? 0
     } else {
-      continue
+      return
     }
     csvRows.push(row([fr.entityName, fr.metricLabel, monthField, value]))
-  }
+  })
 
   return '\uFEFF' + csvRows.join('\r\n')
 }

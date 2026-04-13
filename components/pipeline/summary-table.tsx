@@ -11,12 +11,12 @@ import {
   type SummaryMetricKey,
 } from '@/lib/pipeline/summary-flat-rows'
 import {
+  forEachCellInRange,
   jumpToEdge,
-  normalizeRange,
   type Selection,
   type CellRef,
 } from '@/lib/pipeline/summary-selection'
-import { useSummaryFind } from '@/lib/pipeline/use-summary-find'
+import { useSummaryGridState } from '@/lib/pipeline/use-summary-grid-state'
 import { useSummaryExport } from '@/lib/pipeline/use-summary-export'
 import { MetricRow } from './summary-table-rows'
 import { computeAggregates } from '@/lib/forecast/aggregates'
@@ -71,7 +71,7 @@ export function SummaryTable({ rows, months, fiscalYear }: SummaryTableProps) {
     effectiveCollapsed,
     flatRows,
     flatRowIndex,
-  } = useSummaryFind({
+  } = useSummaryGridState({
     rows,
     months,
     collapsed,
@@ -243,21 +243,18 @@ export function SummaryTable({ rows, months, fiscalYear }: SummaryTableProps) {
 
   const selectionAggregates = useMemo(() => {
     if (!selection) return null
-    const r = normalizeRange(selection)
     const values: number[] = []
-    for (let row = r.rowStart; row <= r.rowEnd; row++) {
+    forEachCellInRange(selection, months.length, (row, col, isTotalCol) => {
       const fr = flatRows[row]
-      if (!fr) continue
-      for (let col = r.colStart; col <= r.colEnd; col++) {
-        if (col < months.length) {
-          values.push(fr.values[col] ?? 0)
-        } else if (col === months.length) {
-          let total = 0
-          for (const v of fr.values) total += v
-          values.push(total)
-        }
+      if (!fr) return
+      if (isTotalCol) {
+        let total = 0
+        for (const v of fr.values) total += v
+        values.push(total)
+      } else if (col < months.length) {
+        values.push(fr.values[col] ?? 0)
       }
-    }
+    })
     if (values.length < 2) return null
     return computeAggregates(values)
   }, [selection, flatRows, months.length])
@@ -383,21 +380,28 @@ export function SummaryTable({ rows, months, fiscalYear }: SummaryTableProps) {
         </div>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1200px] border-collapse text-sm">
+        <table
+          role="grid"
+          aria-label="Pipeline summary"
+          aria-rowcount={flatRowCount}
+          aria-colcount={colCount}
+          className="w-full min-w-[1200px] border-collapse text-sm"
+        >
           <thead>
-            <tr className="border-b border-zinc-200 bg-zinc-50">
-              <th className="sticky left-0 z-20 min-w-[200px] bg-zinc-50 px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-zinc-400">
+            <tr role="row" className="border-b border-zinc-200 bg-zinc-50">
+              <th role="columnheader" className="sticky left-0 z-20 min-w-[200px] bg-zinc-50 px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-zinc-400">
                 Entity / Metric
               </th>
               {months.map((m) => (
                 <th
                   key={m}
+                  role="columnheader"
                   className="bg-zinc-50 px-2.5 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-zinc-400"
                 >
                   {getMonthLabel(m)}
                 </th>
               ))}
-              <th className="bg-zinc-50 px-3 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-zinc-400">
+              <th role="columnheader" className="bg-zinc-50 px-3 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-zinc-400">
                 Total
               </th>
             </tr>
@@ -410,10 +414,12 @@ export function SummaryTable({ rows, months, fiscalYear }: SummaryTableProps) {
               return (
                 <Fragment key={`entity-${row.entityId}`}>
                   <tr
+                    role="row"
                     className="bg-zinc-50 cursor-pointer hover:bg-zinc-100/80 transition-colors"
                     onClick={() => toggleEntity(row.entityId)}
                   >
                     <td
+                      role="rowheader"
                       className="sticky left-0 z-10 bg-inherit px-3 py-2"
                       colSpan={colCount}
                     >
@@ -457,8 +463,9 @@ export function SummaryTable({ rows, months, fiscalYear }: SummaryTableProps) {
 
             {rows.length > 1 && shouldShowGroupTotal() && (
               <>
-                <tr className="bg-zinc-50">
+                <tr role="row" className="bg-zinc-50">
                   <td
+                    role="rowheader"
                     className="sticky left-0 z-10 bg-zinc-50 px-3 py-2 text-xs font-bold text-zinc-900"
                     colSpan={colCount}
                   >

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   normalizeRange,
   cellsInRange,
+  forEachCellInRange,
   isInRange,
   jumpToEdge,
   type Selection,
@@ -59,6 +60,28 @@ describe('cellsInRange', () => {
       { row: 1, col: 1 }, { row: 1, col: 2 },
       { row: 2, col: 1 }, { row: 2, col: 2 },
     ])
+  })
+})
+
+describe('forEachCellInRange', () => {
+  it('emits (row, col, isTotalCol) for a 2×3 selection including the Total col', () => {
+    // months.length = 3, so col 3 is Total. Selection spans cols 2..3 (= month 2 + Total), rows 0..1.
+    const visited: Array<[number, number, boolean]> = []
+    forEachCellInRange(sel(0, 2, 1, 3), 3, (row, col, isTotalCol) => {
+      visited.push([row, col, isTotalCol])
+    })
+    expect(visited).toEqual([
+      [0, 2, false], [0, 3, true],
+      [1, 2, false], [1, 3, true],
+    ])
+  })
+  it('never flags isTotalCol when selection is entirely in month columns', () => {
+    const visited: Array<[number, number, boolean]> = []
+    forEachCellInRange(sel(0, 0, 1, 1), 12, (row, col, isTotalCol) => {
+      visited.push([row, col, isTotalCol])
+    })
+    expect(visited.every(([,, t]) => t === false)).toBe(true)
+    expect(visited).toHaveLength(4)
   })
 })
 

@@ -63,6 +63,8 @@ export function Cell({
 
   return (
     <td
+      role="gridcell"
+      tabIndex={isFocus ? 0 : -1}
       {...(selected ? { 'aria-selected': true as const } : {})}
       onMouseDown={
         selectable ? (e) => onMouseDown(e, flatRow, col) : undefined
@@ -124,8 +126,9 @@ export function MetricRow({
     v === 0 ? 'text-zinc-300' : v < 0 ? 'text-red-600' : 'text-emerald-600'
 
   return (
-    <tr className="hover:bg-zinc-50/50">
+    <tr role="row" className="hover:bg-zinc-50/50">
       <td
+        role="rowheader"
         className={cn(
           'sticky left-0 z-10 px-3 py-1.5 pl-6 text-xs text-zinc-600 hover:bg-zinc-50/50',
           bgClass,

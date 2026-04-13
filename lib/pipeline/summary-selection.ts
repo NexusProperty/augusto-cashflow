@@ -51,6 +51,24 @@ export function cellsInRange(selection: Selection): CellRef[] {
   return out
 }
 
+/**
+ * Iterates every cell in the selection rectangle, invoking the callback with
+ * (row, col, isTotalCol) for each. The Total column lives at col === monthsLen
+ * (the virtual column rendered after all month columns).
+ */
+export function forEachCellInRange(
+  selection: Selection,
+  monthsLen: number,
+  visit: (row: number, col: number, isTotalCol: boolean) => void,
+): void {
+  const r = normalizeRange(selection)
+  for (let row = r.rowStart; row <= r.rowEnd; row++) {
+    for (let col = r.colStart; col <= r.colEnd; col++) {
+      visit(row, col, col === monthsLen)
+    }
+  }
+}
+
 /** Inclusive point-in-range test. */
 export function isInRange(row: number, col: number, selection: Selection): boolean {
   const r = normalizeRange(selection)
