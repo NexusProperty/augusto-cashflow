@@ -111,24 +111,37 @@ export default function GuidePage() {
       <section className="space-y-3">
         <h2 className="text-lg font-semibold text-zinc-900">Editing the grid (Excel-style)</h2>
         <div className="rounded-lg border border-zinc-200 bg-white p-5">
+          <p className="mb-3 text-xs uppercase tracking-wide text-zinc-500">Edit a cell</p>
           <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
             <Shortcut k="Click + type">Overwrite a cell.</Shortcut>
             <Shortcut k="F2">Edit without overwriting.</Shortcut>
             <Shortcut k="Enter / Shift+Enter">Move down / up.</Shortcut>
             <Shortcut k="Tab / Shift+Tab">Move right / left.</Shortcut>
             <Shortcut k="Esc">Cancel an edit.</Shortcut>
-            <Shortcut k="Delete / Backspace">Clear the selected cells.</Shortcut>
-            <Shortcut k="Ctrl + Z">Undo — covers edits, status changes, shifts, creates.</Shortcut>
-            <Shortcut k="Ctrl + Y / Ctrl+Shift+Z">Redo.</Shortcut>
-            <Shortcut k="Ctrl + C / Ctrl + V">Copy and paste from Excel.</Shortcut>
-            <Shortcut k="Ctrl + D">Duplicate selection to the next week.</Shortcut>
-            <Shortcut k="Drag the corner">Fill across cells.</Shortcut>
-            <Shortcut k="Double-click the corner">Auto-fill down to the end of the section.</Shortcut>
+            <Shortcut k="Edit a subtotal">Change is split proportionally across the lines below it.</Shortcut>
+          </dl>
+
+          <p className="mt-5 mb-3 text-xs uppercase tracking-wide text-zinc-500">Select cells</p>
+          <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+            <Shortcut k="Click + drag">Pick a rectangular range.</Shortcut>
+            <Shortcut k="Shift + Click">Extend the range to here.</Shortcut>
+            <Shortcut k="Shift + Arrow">Extend the range one cell.</Shortcut>
+            <Shortcut k="Ctrl + Click">Add (or remove) individual cells — multi-cell.</Shortcut>
             <Shortcut k="Ctrl + Home / End">Jump to the top-left / bottom-right.</Shortcut>
             <Shortcut k="Ctrl + Arrow">Jump to the edge of the data region.</Shortcut>
+          </dl>
+
+          <p className="mt-5 mb-3 text-xs uppercase tracking-wide text-zinc-500">Act on a selection</p>
+          <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+            <Shortcut k="Delete / Backspace">Clear the selected cells.</Shortcut>
+            <Shortcut k="Ctrl + C / Ctrl + V">Copy and paste from Excel.</Shortcut>
+            <Shortcut k="Ctrl + D">Duplicate selection to the next week.</Shortcut>
             <Shortcut k="Alt + → / Alt + ←">Shift the selection one week forward / back.</Shortcut>
+            <Shortcut k="Ctrl + Z">Undo — covers edits, status changes, shifts, creates.</Shortcut>
+            <Shortcut k="Ctrl + Y / Ctrl+Shift+Z">Redo.</Shortcut>
+            <Shortcut k="Drag the corner">Fill across cells.</Shortcut>
+            <Shortcut k="Double-click the corner">Auto-fill down to the end of the section.</Shortcut>
             <Shortcut k="Right-click a cell">Split its value across the next few weeks.</Shortcut>
-            <Shortcut k="Edit a subtotal">Change is split proportionally across the lines below it.</Shortcut>
           </dl>
           <p className="mt-4 text-xs text-zinc-500">
             Cells with a Pipeline badge come from a confirmed project — edit those in the
