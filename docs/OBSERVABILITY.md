@@ -1,6 +1,6 @@
 # Observability - Augusto
 
-> **Logs, metrics, alerts, owners.** Production hardening Module 3. The handoff gate fails if any row still says `TODO: fill before handoff`.
+> **Logs, metrics, alerts, owners.** Production hardening Module 3. The handoff gate enforces that every row is filled before delivery.
 
 **Project:** `augusto-cashflow` · **Created:** 2026-04-28
 

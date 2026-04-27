@@ -1,6 +1,6 @@
 # Reality Gap - Augusto
 
-> **Pre-handoff diagnostic.** Fill in each row before running `npm run prepare-handoff -- --client augusto-cashflow`. The handoff gate fails if any row still contains `TODO: fill before handoff`.
+> **Pre-handoff diagnostic.** Each row maps a prototype default to the production requirement this build commits to, with owner + target. Filled rows are checked by the prepare-handoff gate; unfilled-row sentinels block the gate.
 
 This document records the anti-patterns this build deliberately addressed before delivery. It is the cheapest possible Module-0/4/5 review gate from the prodblueprint.dev framework.
 

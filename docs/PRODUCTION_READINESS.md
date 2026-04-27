@@ -1,6 +1,6 @@
 # Production Readiness - Augusto
 
-> **Per-client hardening checklist.** Walks Modules 1-7 of the prodblueprint.dev framework. Every row is `TODO: fill before handoff` until the builder ticks it. The handoff gate fails if any sentinel remains.
+> **Per-client hardening checklist.** Walks Modules 1-7 of the prodblueprint.dev framework. The handoff gate enforces that every row is filled before delivery.
 
 **Project:** `augusto-cashflow` · **Created:** 2026-04-28 · **Starter pack:** `none (pre-Phase-1 scaffold; backfilled retroactively)`
 **Enabled modules:** auth, documents, forecast, pipeline
@@ -9,7 +9,7 @@
 
 ## How to use
 
-For each module: state the *production requirement* this build meets (not a generic best practice). Cite files, schemas, jobs, alerts, and tests. If a row does not apply, replace `TODO: fill before handoff` with `N/A - <reason>` and link to the design decision.
+For each module: state the *production requirement* this build meets (not a generic best practice). Cite files, schemas, jobs, alerts, and tests. Rows that do not apply use `N/A - <reason>` with a link to the design decision.
 
 ---
 
