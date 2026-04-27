@@ -1,0 +1,37 @@
+name: CI
+
+# Authored 2026-04-28 as part of Mission Control PRB Phase 4.6 backfill.
+# Augusto cashflow uses a leaner CI than Mission Control because it has no
+# migration-lint / types-drift / Deno-edge-function gates of its own. When
+# those gates land, add jobs here mirroring MC's deploy.yml shape.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  quality:
+    name: Lint, Typecheck & Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests with coverage
+        run: npm run test:coverage
