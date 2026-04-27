@@ -1,7 +1,7 @@
-#!/bin/sh
 # Phase 4.6 backfilled this hook from Mission Control's scaffold baseline.
-# Lint is intentionally NOT in this hook because augusto-cashflow's ESLint config
-# pre-dates flat-config conventions and `eslint .` ignores everything (separate
-# follow-up to fix). When the lint config is fixed, add `node node_modules/eslint/bin/eslint.js .`
-# back to this hook above the typecheck line.
+# Lint is intentionally NOT in this hook because augusto-cashflow has 72
+# pre-existing lint errors (surfaced after Phase-4.6 follow-up fixed the
+# previously-broken ESLint flat-config). When the source-cleanup sprint
+# lands, add the lint line back above typecheck:
+#   node node_modules/eslint/bin/eslint.js .
 node node_modules/typescript/bin/tsc --noEmit
